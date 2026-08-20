@@ -1,0 +1,30 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+node_modules/
+.pnpm-store/
+*.tsbuildinfo
+wheels/
+*.egg-info
+*.jsonl
+
+# Virtual environments
+.venv
+
+# Environment variables
+.env
+.env.development
+.env.staging
+.env.production
+
+# Misc
+*.ipynb
+
+# Reports
+evals/reports/
+
+#agent
+.cursor
+CLAUDE.md
