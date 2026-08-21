@@ -27,7 +27,7 @@ def test_jwt_token_type_cannot_cross_auth_boundaries() -> None:
 
 def test_password_special_characters_round_trip_without_sanitization() -> None:
     """HTML-significant password characters should still verify correctly."""
-    password = 'Strong&Password<123!'
+    password = "Strong&Password<123!"
     hashed = User.hash_password(password)
     user = User(email="security@example.com", hashed_password=hashed)
     assert user.verify_password(password)

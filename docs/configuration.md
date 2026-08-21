@@ -15,7 +15,7 @@ cp .env.example .env.development
 | Variable | Default | Description |
 | --- | --- | --- |
 | `APP_ENV` | `development` | Environment: `development`, `staging`, `production`, `test` |
-| `PROJECT_NAME` | `FastAPI LangGraph Template` | Displayed in API docs and logs |
+| `PROJECT_NAME` | `QA Agent` | Displayed in API docs and logs |
 | `VERSION` | `1.0.0` | API version |
 | `DEBUG` | `false` | Enables debug logging and profiling middleware |
 | `API_V1_STR` | `/api/v1` | API prefix |
@@ -56,7 +56,7 @@ cp .env.example .env.development
 | `POSTGRES_HOST` | `localhost` | PostgreSQL host |
 | `POSTGRES_PORT` | `5432` | PostgreSQL port |
 | `POSTGRES_PUBLISHED_PORT` | `5432` | Host port published by Docker Compose; change it when local PostgreSQL already uses 5432 |
-| `POSTGRES_DB` | `food_order_db` | Database name |
+| `POSTGRES_DB` | `qa_agent` | Database name |
 | `POSTGRES_USER` | `postgres` | Database user |
 | `POSTGRES_PASSWORD` | `postgres` | Database password |
 | `POSTGRES_POOL_SIZE` | `20` | SQLAlchemy connection pool size |

@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-This is a template repository. Security fixes are applied to the `master` branch. Fork maintainers are responsible for keeping their forks up to date.
+Security fixes are applied to the `main` branch. Fork maintainers are responsible for keeping their forks up to date.
 
 ## Reporting a vulnerability
 
@@ -16,7 +16,7 @@ Report privately via [GitHub Security Advisories](../../security/advisories/new)
 
 You can expect an acknowledgement within 48 hours and a fix or mitigation plan within 7 days for confirmed vulnerabilities.
 
-## Security considerations when using this template
+## Security considerations
 
 **Before deploying to production:**
 
@@ -24,10 +24,10 @@ You can expect an acknowledgement within 48 hours and a fix or mitigation plan w
 - Rotate all secrets — never use the `.env.example` values
 - Set `DEBUG=false`
 - Restrict `ALLOWED_ORIGINS` to your actual frontend domain
-- Set `LANGFUSE_TRACING_ENABLED=false` if you don't want conversation data sent to Langfuse
+- Local tracing records only performance, call-chain IDs, token counts, and content-free errors
 - Use environment-specific `.env` files — never commit secrets to git
 
-**What the template does to protect you:**
+**Built-in protections:**
 
 - Passwords hashed with bcrypt (never stored plaintext)
 - JWT tokens include a `jti` claim for uniqueness

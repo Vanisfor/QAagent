@@ -13,7 +13,7 @@ repos:
       - id: check-added-large-files
         args: ["--maxkb=500"]
       - id: no-commit-to-branch
-        args: ["--branch", "master"]
+        args: ["--branch", "main"]
 
   # Secrets detection
   - repo: https://github.com/Yelp/detect-secrets
@@ -21,7 +21,7 @@ repos:
     hooks:
       - id: detect-secrets
         args: ["--baseline", ".secrets.baseline"]
-        exclude: \.env\.example$
+        exclude: (^\.env\.example$|^frontend/pnpm-lock\.yaml$)
 
   # Ruff: linting + formatting (replaces black, isort, flake8)
   - repo: https://github.com/astral-sh/ruff-pre-commit
@@ -36,7 +36,7 @@ repos:
     hooks:
       - id: pyright
         name: pyright
-        entry: uv run pyright
+        entry: uv run --no-sync python -m pyright
         language: system
         types: [python]
         pass_filenames: false

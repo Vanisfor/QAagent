@@ -50,9 +50,7 @@ def test_replace_and_search_source_in_pgvector() -> None:
             assert inserted == 2
 
             inserted = await asyncio.wait_for(
-                service.replace_source(
-                    [DocumentChunk(content="alpha replacement fact", source=source)]
-                ),
+                service.replace_source([DocumentChunk(content="alpha replacement fact", source=source)]),
                 timeout=10,
             )
             assert inserted == 1
@@ -83,9 +81,7 @@ def test_knowledge_search_tool_returns_pgvector_source(monkeypatch: pytest.Monke
         monkeypatch.setattr(knowledge_service, "embed", fake_embed)
         try:
             await asyncio.wait_for(
-                knowledge_service.replace_source(
-                    [DocumentChunk(content="alpha tool-visible fact", source=source)]
-                ),
+                knowledge_service.replace_source([DocumentChunk(content="alpha tool-visible fact", source=source)]),
                 timeout=10,
             )
             result = await asyncio.wait_for(

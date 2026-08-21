@@ -40,7 +40,7 @@ app/
   schemas/         # Pydantic request/response schemas + graph state
   services/        # Business logic services
   utils/           # Shared utilities
-evals/             # LLM evaluation framework (Langfuse-based)
+evals/             # Local JSONL-based LLM evaluation framework
 scripts/           # Environment setup, Docker build scripts
 ```
 
@@ -49,7 +49,7 @@ scripts/           # Environment setup, Docker build scripts
 This is a production-ready AI agent application built with:
 - **LangGraph** for stateful, multi-step AI agent workflows
 - **FastAPI** for high-performance async REST API endpoints
-- **Langfuse** for LLM observability and tracing
+- **Local JSONL tracing** for performance, call chains, tokens, and errors
 - **PostgreSQL + pgvector** for long-term memory storage (mem0ai)
 - **JWT authentication** with session management
 - **Prometheus + Grafana** for monitoring
@@ -111,8 +111,8 @@ This is a production-ready AI agent application built with:
 - Use `Command` for controlling graph flow between nodes
 
 ### Tracing
-- Use LangChain's `CallbackHandler` from Langfuse for tracing all LLM calls
-- All LLM operations must have Langfuse tracing enabled
+- Use `trace_span()` from `app.core.tracing` for Agent, Tool, LLM, RAG, memory, and streaming stages
+- Never record prompts, answers, tool arguments, retrieved documents, credentials, or raw reasoning in traces
 
 ### Memory (mem0ai)
 - Use `AsyncMemory` for semantic memory storage
@@ -144,7 +144,7 @@ This is a production-ready AI agent application built with:
 
 ## Observability
 
-- Integrate Langfuse for LLM tracing on all agent operations
+- Use the local tracing layer for all Agent, Tool, LLM, RAG, memory, and streaming operations
 - Export Prometheus metrics for API performance
 - Use structured logging with context binding (request_id, session_id, user_id)
 - Track LLM inference duration, token usage, and costs
@@ -153,7 +153,7 @@ This is a production-ready AI agent application built with:
 
 - Implement metric-based evaluations for LLM outputs (see `evals/` directory)
 - Create custom evaluation metrics as markdown files in `evals/metrics/prompts/`
-- Use Langfuse traces for evaluation data sources
+- Use explicit local JSONL evaluation records; trace files intentionally contain no prompt or answer content
 - Generate JSON reports with success rates
 
 ## Configuration Management
@@ -167,7 +167,7 @@ This is a production-ready AI agent application built with:
 - **FastAPI** - Web framework
 - **LangGraph** - Agent workflow orchestration
 - **LangChain** - LLM abstraction and tools
-- **Langfuse** - LLM observability and tracing
+- **Local tracing** - ContextVar spans, JSONL storage, token accounting, and error classification
 - **Pydantic v2** - Data validation and settings
 - **structlog** - Structured logging
 - **mem0ai** - Long-term memory management
@@ -181,7 +181,7 @@ This is a production-ready AI agent application built with:
 ## 10 Commandments for This Project
 
 1. All routes must have rate limiting decorators
-2. All LLM operations must have Langfuse tracing
+2. All LLM operations must use the local content-free tracing layer
 3. All async operations must have proper error handling
 4. All logs must follow structured logging format with lowercase_underscore event names
 5. All retries must use tenacity library
@@ -197,7 +197,7 @@ This is a production-ready AI agent application built with:
 - ❌ Using f-strings in structlog events
 - ❌ Adding imports inside functions
 - ❌ Forgetting rate limiting decorators on routes
-- ❌ Missing Langfuse tracing on LLM calls
+- ❌ Recording prompts, answers, documents, credentials, or raw reasoning in traces
 - ❌ Caching error responses
 - ❌ Using `logger.error()` instead of `logger.exception()` for exceptions
 - ❌ Blocking I/O operations without async
@@ -213,11 +213,11 @@ Before modifying code:
 4. Add appropriate logging with structured format
 5. Include error handling with early returns
 6. Add type hints and Pydantic models
-7. Verify Langfuse tracing is enabled for LLM calls
+7. Verify local tracing covers LLM calls without capturing business content
 
 ## References
 
 - LangGraph Documentation: https://langchain-ai.github.io/langgraph/
 - LangChain Documentation: https://python.langchain.com/docs/
 - FastAPI Documentation: https://fastapi.tiangolo.com/
-- Langfuse Documentation: https://langfuse.com/docs
+- Local tracing documentation: `docs/observability.md`

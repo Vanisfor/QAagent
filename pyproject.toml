@@ -1,7 +1,7 @@
 [project]
-name = "langgraph-fastapi-template"
+name = "qa-agent"
 version = "0.1.0"
-description = "LangGraph FastAPI Template"
+description = "Production-oriented RAG question-answering agent"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
@@ -107,7 +107,7 @@ disable = [
     "redefined-outer-name",
 ]
 
-[tool.pylint.master]
+[tool.pylint.main]
 ignore = "migrations"
 
 [tool.ruff]

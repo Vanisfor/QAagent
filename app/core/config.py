@@ -123,11 +123,9 @@ class Settings:
         self.ENVIRONMENT = get_environment()
 
         # Application Settings
-        self.PROJECT_NAME = os.getenv("PROJECT_NAME", "FastAPI LangGraph Template")
+        self.PROJECT_NAME = os.getenv("PROJECT_NAME", "QA Agent")
         self.VERSION = os.getenv("VERSION", "1.0.0")
-        self.DESCRIPTION = os.getenv(
-            "DESCRIPTION", "A production-ready FastAPI template with LangGraph and local tracing"
-        )
+        self.DESCRIPTION = os.getenv("DESCRIPTION", "A production-oriented RAG agent with LangGraph and local tracing")
         self.API_V1_STR = os.getenv("API_V1_STR", "/api/v1")
         self.DEBUG = os.getenv("DEBUG", "false").lower() in ("true", "1", "t", "yes")
 
@@ -168,9 +166,7 @@ class Settings:
         self.LLM_TOTAL_TIMEOUT = int(os.getenv("LLM_TOTAL_TIMEOUT", "60"))
 
         # Long term memory Configuration
-        self.LONG_TERM_MEMORY_MODEL = os.getenv(
-            "LONG_TERM_MEMORY_MODEL", "deepseek-v4-flash"
-        )
+        self.LONG_TERM_MEMORY_MODEL = os.getenv("LONG_TERM_MEMORY_MODEL", "deepseek-v4-flash")
         self.LONG_TERM_MEMORY_EMBEDDER_MODEL = os.getenv("LONG_TERM_MEMORY_EMBEDDER_MODEL", "BAAI/bge-m3")
         self.LONG_TERM_MEMORY_COLLECTION_NAME = os.getenv("LONG_TERM_MEMORY_COLLECTION_NAME", "longterm_memory")
 
@@ -212,7 +208,7 @@ class Settings:
         # Postgres Configuration
         self.POSTGRES_HOST = os.getenv("POSTGRES_HOST", "localhost")
         self.POSTGRES_PORT = int(os.getenv("POSTGRES_PORT", "5432"))
-        self.POSTGRES_DB = os.getenv("POSTGRES_DB", "food_order_db")
+        self.POSTGRES_DB = os.getenv("POSTGRES_DB", "qa_agent")
         self.POSTGRES_USER = os.getenv("POSTGRES_USER", "postgres")
         self.POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD", "postgres")
         self.POSTGRES_POOL_SIZE = int(os.getenv("POSTGRES_POOL_SIZE", "20"))

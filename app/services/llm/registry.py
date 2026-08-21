@@ -23,9 +23,7 @@ def _create_llm(model_name: str, **overrides: Any) -> BaseChatModel:
         "api_key": _DEEPSEEK_API_KEY,
         "base_url": settings.DEEPSEEK_BASE_URL,
         "max_tokens": settings.MAX_TOKENS,
-        "extra_body": {
-            "thinking": {"type": "enabled" if settings.DEEPSEEK_THINKING_ENABLED else "disabled"}
-        },
+        "extra_body": {"thinking": {"type": "enabled" if settings.DEEPSEEK_THINKING_ENABLED else "disabled"}},
     }
     if not settings.DEEPSEEK_THINKING_ENABLED:
         model_options["temperature"] = settings.DEFAULT_LLM_TEMPERATURE

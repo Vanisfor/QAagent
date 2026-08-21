@@ -20,11 +20,11 @@ cp .env.example .env.development
 # Required: DEEPSEEK_API_KEY, JWT_SECRET_KEY
 
 make install       # installs Python deps + pre-commit hooks
-make docker-up     # starts API (port 8000) + PostgreSQL
+make docker-up     # starts API (published port from APP_PUBLISHED_PORT) + PostgreSQL
 make docker-migrate # runs Alembic migrations inside the app container
 ```
 
-Open [http://localhost:8000/docs](http://localhost:8000/docs).
+Open [http://localhost:8001/docs](http://localhost:8001/docs).
 
 ## Option B: Local Python
 
@@ -45,7 +45,7 @@ make dev           # starts server with hot reload on port 8000
 ### 1. Register a user
 
 ```bash
-curl -X POST http://localhost:8000/api/v1/auth/register \
+curl -X POST http://localhost:8001/api/v1/auth/register \
   -H "Content-Type: application/json" \
   -d '{"email": "you@example.com", "password": "Secret123!", "username": "you"}'  # pragma: allowlist secret
 ```
@@ -55,7 +55,7 @@ Returns a `user_id` and a JWT token.
 ### 2. Create a session
 
 ```bash
-curl -X POST http://localhost:8000/api/v1/auth/session \
+curl -X POST http://localhost:8001/api/v1/auth/session \
   -H "Authorization: Bearer <token from step 1>"
 ```
 
@@ -64,7 +64,7 @@ Returns a `session_id` and a session-scoped JWT.
 ### 3. Chat
 
 ```bash
-curl -X POST http://localhost:8000/api/v1/chatbot/chat \
+curl -X POST http://localhost:8001/api/v1/chatbot/chat \
   -H "Authorization: Bearer <session token>" \
   -H "Content-Type: application/json" \
   -d '{"messages": [{"role": "user", "content": "Hello!"}]}'
@@ -73,7 +73,7 @@ curl -X POST http://localhost:8000/api/v1/chatbot/chat \
 Or use the streaming endpoint for real-time responses:
 
 ```bash
-curl -X POST http://localhost:8000/api/v1/chatbot/chat/stream \
+curl -X POST http://localhost:8001/api/v1/chatbot/chat/stream \
   -H "Authorization: Bearer <session token>" \
   -H "Content-Type: application/json" \
   -d '{"messages": [{"role": "user", "content": "Hello!"}]}'
@@ -86,8 +86,8 @@ The parts you'll most likely change:
 | What | Where |
 |---|---|
 | Agent personality & instructions | `app/core/prompts/system.md` |
-| Available tools | `app/core/langgraph/tools.py` |
-| LLM models & fallback order | `app/services/llm.py` → `LLMRegistry.LLMS` |
+| Available tools | `app/core/langgraph/tools/` |
+| LLM models & fallback order | `app/services/llm/registry.py` → `LLMRegistry.LLMS` |
 | Memory collection name | `LONG_TERM_MEMORY_COLLECTION_NAME` in `.env` |
 
 ## Running pre-commit hooks
@@ -103,7 +103,7 @@ Hooks include: trailing whitespace, YAML/TOML/JSON validation, secret detection,
 ## Troubleshooting
 
 **Database connection error on startup**
-Make sure PostgreSQL is running and `POSTGRES_*` vars in your `.env` match. With Docker: `make docker-up` handles this (including migrations).
+Make sure PostgreSQL is running and `POSTGRES_*` vars in your `.env` match. With Docker, run `make docker-up` and then `make docker-migrate`.
 
 **`could not translate host name "db"`**
 `POSTGRES_HOST=db` only resolves *inside* the Docker network (it's the Compose

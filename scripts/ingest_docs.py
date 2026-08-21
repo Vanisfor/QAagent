@@ -8,7 +8,7 @@ Usage (from the project root):
     uv run python scripts/ingest_docs.py docs/ --chunk-size 500       # tune chunking
 
 Supported formats: .md, .txt, .rst. Requires:
-  - PostgreSQL running with pgvector (make docker-up / make migrate)
+  - PostgreSQL running with pgvector (make docker-up / make docker-migrate)
   - SILICONFLOW_API_KEY set in .env.development (free embedding API)
 
 Each source is replaced atomically: re-ingesting an edited file removes stale
@@ -64,9 +64,7 @@ def collect_files(path: Path) -> list[Path]:
 def chunk_file(path: Path, chunk_size: int, chunk_overlap: int, source: str | None) -> list[DocumentChunk]:
     """Read a file and split it into overlapping chunks."""
     if chunk_overlap >= chunk_size:
-        raise ValueError(
-            f"chunk_overlap ({chunk_overlap}) must be smaller than chunk_size ({chunk_size})"
-        )
+        raise ValueError(f"chunk_overlap ({chunk_overlap}) must be smaller than chunk_size ({chunk_size})")
 
     text = path.read_text(encoding="utf-8", errors="ignore")
     if not text.strip():
@@ -170,7 +168,9 @@ def parse_args() -> argparse.Namespace:
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(description="Ingest documents into the RAG knowledge base.")
     parser.add_argument("path", help="Path to a document file or a directory of documents")
-    parser.add_argument("--chunk-size", type=int, default=settings.KNOWLEDGE_CHUNK_SIZE, help="Chunk size (characters)")
+    parser.add_argument(
+        "--chunk-size", type=int, default=settings.KNOWLEDGE_CHUNK_SIZE, help="Chunk size (characters)"
+    )
     parser.add_argument("--chunk-overlap", type=int, default=settings.KNOWLEDGE_CHUNK_OVERLAP, help="Chunk overlap")
     parser.add_argument("--source", type=str, default=None, help="Override the source label for all chunks")
     parser.add_argument("--reset", action="store_true", help="Delete all existing chunks before ingesting")

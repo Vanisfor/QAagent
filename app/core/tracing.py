@@ -22,11 +22,31 @@ _span_stack: ContextVar[tuple[str, ...]] = ContextVar("span_stack", default=())
 _writer = JsonlTraceWriter(settings.TRACE_DIR, settings.TRACE_FILE_RETENTION_DAYS)
 
 _ALLOWED_ATTRIBUTES = {
-    "method", "route", "status_code", "streaming", "resumed", "tool_call_count",
-    "tool_name", "attempt_count", "model", "top_k", "hit_count", "similarity_threshold",
-    "batch_size", "dimensions", "chunk_count", "time_to_first_token_ms", "cache_hit",
-    "result_count", "detached", "source_count", "inserted_count", "client_disconnected",
+    "method",
+    "route",
+    "status_code",
+    "streaming",
+    "resumed",
+    "tool_call_count",
+    "tool_name",
+    "attempt_count",
+    "model",
+    "top_k",
+    "hit_count",
+    "similarity_threshold",
+    "batch_size",
+    "dimensions",
+    "chunk_count",
+    "time_to_first_token_ms",
+    "cache_hit",
+    "result_count",
+    "detached",
+    "source_count",
+    "inserted_count",
+    "client_disconnected",
 }
+
+
 def current_trace_id() -> str | None:
     """Return the trace ID bound to the current context."""
     return _trace_id.get()

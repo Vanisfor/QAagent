@@ -2,12 +2,27 @@ name: CI
 
 on:
   pull_request:
+    branches: [main]
   push:
-    branches: [master]
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   checks:
     runs-on: ubuntu-latest
+    env:
+      APP_ENV: test
+      JWT_SECRET_KEY: ci-test-jwt-secret-with-at-least-32-characters # pragma: allowlist secret
+      DEEPSEEK_API_KEY: ci-test-deepseek-key-placeholder # pragma: allowlist secret
+      SILICONFLOW_API_KEY: ci-test-siliconflow-key-placeholder # pragma: allowlist secret
+      MEM0_DIR: /tmp/qaagent-mem0
+      TRACE_DIR: /tmp/qaagent-traces
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
@@ -17,3 +32,23 @@ jobs:
       - run: uv run ruff check .
       - run: uv run ruff format --check .
       - run: uv run pyright
+      - run: uv run pytest -m "not integration" -q
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.19.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm build

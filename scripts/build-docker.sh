@@ -61,6 +61,6 @@ echo "API keys: ******** (masked for security)"
 # Secrets are supplied at container runtime through env_file, never as build args.
 docker build --no-cache \
     --build-arg APP_ENV="$ENV" \
-    -t fastapi-langgraph-template:"$ENV" .
+    -t qaagent:"$ENV" .
 
-echo "Docker image fastapi-langgraph-template:$ENV built successfully"
+echo "Docker image qaagent:$ENV built successfully"

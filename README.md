@@ -1,6 +1,6 @@
-# FastAPI LangGraph Agent Template
+# QA Agent
 
-A production-ready template for building AI agent backends with FastAPI and LangGraph. Handles the hard parts — stateful conversations, long-term memory, tool calling, observability, rate limiting, auth — so you can focus on your agent logic.
+A production-oriented RAG question-answering agent built with FastAPI, LangGraph, DeepSeek, PostgreSQL, and React.
 
 **Built for AI engineers** who want a solid foundation, not a tutorial project.
 
@@ -65,7 +65,7 @@ make install
 make docker-up                     # starts API + PostgreSQL
 ```
 
-Open [http://localhost:8000/docs](http://localhost:8000/docs) to see the interactive API.
+Open [http://localhost:8001/docs](http://localhost:8001/docs) to see the interactive API.
 
 ### React frontend
 
@@ -131,11 +131,11 @@ See [LICENSE](LICENSE).
 
 ### General
 
-**What is this template?**
+**What is this project?**
 A production-ready foundation for AI agent backends built on FastAPI + LangGraph. It bundles the components you'd otherwise wire up by hand: stateful conversations, long-term memory, tool calling, observability, rate limiting, and JWT auth.
 
 **How does this differ from a basic LangGraph setup?**
-The base LangGraph quickstart stops at "agent runs locally". This template adds Alembic migrations, mem0 + pgvector long-term memory, local JSONL tracing, Prometheus + Grafana dashboards, JWT sessions, slowapi rate limiting, structured logging with per-request context, and a circular-fallback LLM service.
+The base LangGraph quickstart stops at "agent runs locally". QA Agent adds Alembic migrations, mem0 + pgvector long-term memory, local JSONL tracing, Prometheus + Grafana dashboards, JWT sessions, slowapi rate limiting, structured logging with per-request context, and a time-bounded LLM service.
 
 ### Setup & Configuration
 
@@ -164,7 +164,7 @@ The self-developed tracing layer writes daily JSONL files under `logs/traces`. I
 **The API won't start**
 - Ensure PostgreSQL is running (`make docker-up` brings it up alongside the API)
 - Confirm `.env.development` exists — copy from `.env.example` and fill in required keys
-- Apply migrations: `make migrate`
+- Apply migrations: `make docker-migrate` for Docker, or `make migrate` for a host-local database
 
 **Memory / semantic search returns nothing**
 - Verify the `pgvector` extension is enabled in your PostgreSQL instance

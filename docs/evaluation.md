@@ -1,6 +1,6 @@
 # Evaluation
 
-The template includes a metric-based evaluation framework that reads explicit local input/output records, scores them with LLM judges, and generates JSON reports. Trace files are intentionally not an evaluation data source because they contain no prompt or answer content.
+QA Agent includes a metric-based evaluation framework that reads explicit local input/output records, scores them with LLM judges, and generates JSON reports. Trace files are intentionally not an evaluation data source because they contain no prompt or answer content.
 
 ## Running evaluations
 

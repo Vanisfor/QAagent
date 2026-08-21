@@ -45,7 +45,7 @@ graph LR
 
    ```bash
    make docker-up     # or your local PostgreSQL with pgvector
-   make migrate
+   make docker-migrate
    ```
 
 3. **Ingest your documents** (`.md`, `.txt`, `.rst` — files or directories):

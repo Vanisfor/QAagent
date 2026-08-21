@@ -80,9 +80,7 @@ def _content_hash(content: str) -> str:
 def _validate_embeddings(embeddings: List[List[float]], expected_count: int) -> None:
     """Validate provider output before it reaches pgvector."""
     if len(embeddings) != expected_count:
-        raise RuntimeError(
-            f"embedding count mismatch: received {len(embeddings)} vectors for {expected_count} texts"
-        )
+        raise RuntimeError(f"embedding count mismatch: received {len(embeddings)} vectors for {expected_count} texts")
 
     for index, embedding in enumerate(embeddings):
         if len(embedding) != settings.EMBEDDING_DIM:

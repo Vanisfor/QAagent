@@ -53,10 +53,10 @@ This runs `scripts/build-docker.sh` which builds and tags the image for the spec
 After `make docker-up`, run migrations against the containerised database:
 
 ```bash
-make migrate ENV=development
+make docker-migrate ENV=development
 ```
 
-This sources the correct `.env` file and runs `alembic upgrade head` from your local machine, connecting to the containerised PostgreSQL.
+This runs `alembic upgrade head` inside the app container, where the `db` service hostname resolves correctly.
 
 ## Environment files
 
