@@ -35,9 +35,25 @@ from app.schemas.chat import (
 )
 from app.services.session_naming import maybe_name_session
 from app.services.memory import memory_service
+from app.services.user_llm_settings import (
+    UserLLMSettingsNotConfigured,
+    UserLLMRuntimeConfig,
+    UserLLMSettingsUnavailable,
+    user_llm_settings_service,
+)
 
 router = APIRouter()
 agent = LangGraphAgent()
+
+
+async def _require_user_llm(user_id: int) -> UserLLMRuntimeConfig:
+    """Resolve BYOK settings before a response begins, especially for SSE."""
+    try:
+        return await user_llm_settings_service.get_runtime(user_id)
+    except UserLLMSettingsNotConfigured as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    except UserLLMSettingsUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
 
 
 @router.post("/chat", response_model=ChatResponse)
@@ -60,6 +76,7 @@ async def chat(
     Raises:
         HTTPException: If there's an error processing the request.
     """
+    await _require_user_llm(session.user_id)
     try:
         logger.info(
             "chat_request_received",
@@ -68,7 +85,7 @@ async def chat(
         )
 
         if settings.SESSION_NAMING_ENABLED:
-            await maybe_name_session(session.id, session.name, chat_request.messages)
+            await maybe_name_session(session.id, session.user_id, session.name, chat_request.messages)
 
         with trace_span("agent.run", streaming=False):
             result = await agent.get_response(
@@ -107,6 +124,9 @@ async def chat_stream(
     Raises:
         HTTPException: If there's an error processing the request.
     """
+    runtime = await _require_user_llm(session.user_id)
+    model_name = runtime.model
+    del runtime
     try:
         logger.info(
             "stream_chat_request_received",
@@ -115,7 +135,7 @@ async def chat_stream(
         )
 
         if settings.SESSION_NAMING_ENABLED:
-            await maybe_name_session(session.id, session.name, chat_request.messages)
+            await maybe_name_session(session.id, session.user_id, session.name, chat_request.messages)
 
         stream_trace_id = current_trace_id()
         stream_parent_span_id = current_span_id()
@@ -140,7 +160,7 @@ async def chat_stream(
                     chunk_count = 0
                     first_token_seen = False
                     try:
-                        with llm_stream_duration_seconds.labels(model=agent.llm_service.get_llm().get_name()).time():
+                        with llm_stream_duration_seconds.labels(model=model_name).time():
                             async for event in agent.get_stream_response(
                                 chat_request.messages,
                                 session.id,

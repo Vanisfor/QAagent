@@ -25,7 +25,8 @@ from app.core.tracing import trace_span
 from app.models.session import Session as ChatSession
 from app.schemas.chat import SessionTitle
 from app.services.database import database_service
-from app.services.llm import llm_service
+from app.services.llm import LLMService
+from app.services.user_llm_settings import user_llm_settings_service
 
 _PLACEHOLDER_MAX = 40
 
@@ -54,10 +55,11 @@ async def _claim_session(session_id: str, placeholder: str) -> bool:
         return (result.rowcount or 0) == 1
 
 
-async def _persist_session_name(session_id: str, user_message: str) -> None:
+async def _persist_session_name(session_id: str, user_id: int, user_message: str) -> None:
     with trace_span("session.naming"):
         try:
-            result = await llm_service.call(
+            runtime = await user_llm_settings_service.get_runtime(user_id)
+            result = await LLMService(runtime).call(
                 [
                     SystemMessage(content=SESSION_TITLE_PROMPT),
                     HumanMessage(content=user_message[:500]),
@@ -66,6 +68,7 @@ async def _persist_session_name(session_id: str, user_message: str) -> None:
                 response_format=SessionTitle,
                 max_tokens=32,
                 temperature=0.3,
+                extra_body={"thinking": {"type": "disabled"}},
             )
             await database_service.update_session_name(session_id, result.title)
             session_names_generated_total.labels(status="success").inc()
@@ -75,7 +78,7 @@ async def _persist_session_name(session_id: str, user_message: str) -> None:
             logger.exception("session_name_generation_failed", session_id=session_id)
 
 
-async def maybe_name_session(session_id: str, session_name: str, messages: list) -> None:
+async def maybe_name_session(session_id: str, user_id: int, session_name: str, messages: list) -> None:
     """Trigger session auto-naming if the session is still unnamed.
 
     Safe to call from any chat endpoint — concurrent callers for the same
@@ -87,6 +90,6 @@ async def maybe_name_session(session_id: str, session_name: str, messages: list)
     if not first_user_msg:
         return
     if await _claim_session(session_id, _build_placeholder(first_user_msg)):
-        task = asyncio.create_task(_persist_session_name(session_id, first_user_msg))
+        task = asyncio.create_task(_persist_session_name(session_id, user_id, first_user_msg))
         _background_tasks.add(task)
         task.add_done_callback(_background_tasks.discard)

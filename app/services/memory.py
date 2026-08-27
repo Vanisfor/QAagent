@@ -104,8 +104,9 @@ class MemoryService:
                 memories = results["results"]
                 span.set_attribute("result_count", len(memories))
                 result = "\n".join([f"* {r['memory']}" for r in memories])
-                if result:
-                    await cache_service.set(key, result)
+                # An empty result is still a successful lookup. Caching it avoids
+                # repeatedly calling mem0 for the same query during the TTL.
+                await cache_service.set(key, result)
                 return result
             except Exception as e:
                 span.record_error(e)

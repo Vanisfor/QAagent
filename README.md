@@ -46,10 +46,12 @@ PostgreSQL + pgvector :5433
 | pnpm | 前端依赖管理 | 11.19.0 |
 | GNU Make | 执行 Makefile 快捷命令 | 可选；Windows 可直接使用下文的 PowerShell 命令 |
 
-至少还需要准备两个 API Key：
+平台部署至少需要准备下面的服务凭据：
 
-1. `DEEPSEEK_API_KEY`：负责问答、会话命名和长期记忆抽取。
+1. `DEEPSEEK_API_KEY`：当前仅供平台级长期记忆抽取使用；聊天和会话命名使用登录用户自己的凭据。
 2. `SILICONFLOW_API_KEY`：负责 RAG 和长期记忆的向量嵌入。
+
+每个登录用户在右上角“模型与 API 设置”中添加自己的 DeepSeek API Key。用户 Key 使用服务器主密钥加密后写入数据库，不进入 `.env`、前端存储、日志、trace 或 LangGraph checkpoint。
 
 ## 二、创建开发配置
 
@@ -82,6 +84,10 @@ DEEPSEEK_BASE_URL=https://api.deepseek.com
 DEFAULT_LLM_MODEL=deepseek-v4-flash
 DEEPSEEK_THINKING_ENABLED=false
 
+# 加密用户 API Key；请使用独立的高熵随机密钥
+USER_SETTINGS_ENCRYPTION_KEY="替换为至少 32 字节的随机密钥"
+ALLOWED_LLM_BASE_URLS="https://api.deepseek.com"
+
 # 仅建议在本地开发时打开；生产环境应为 false
 EXPOSE_REASONING_CONTENT=true
 
@@ -107,7 +113,7 @@ POSTGRES_PASSWORD="替换为强密码"
 GRAFANA_ADMIN_PASSWORD="替换为强密码"
 ```
 
-PowerShell 可以用下面的命令生成 JWT 密钥：
+PowerShell 可以用下面的命令分别生成 JWT 密钥和用户凭据加密密钥：
 
 ```powershell
 $bytes = New-Object byte[] 48
@@ -115,7 +121,7 @@ $bytes = New-Object byte[] 48
 [Convert]::ToBase64String($bytes)
 ```
 
-`.env.development` 已被 Git 忽略。不要把真实 API Key、数据库密码或 JWT 密钥写入 `.env.example` 或提交到仓库。
+`.env.development` 已被 Git 忽略。不要把真实 API Key、数据库密码、JWT 密钥或用户凭据加密密钥写入 `.env.example` 或提交到仓库。每个用户首次聊天前必须在设置页完成连接验证；验证失败或供应商不可用时不会覆盖已有配置。
 
 ### 关于两个数据库端口
 

@@ -164,6 +164,11 @@ class Settings:
         self.MAX_TOKENS = int(os.getenv("MAX_TOKENS", "2000"))
         self.MAX_LLM_CALL_RETRIES = int(os.getenv("MAX_LLM_CALL_RETRIES", "3"))
         self.LLM_TOTAL_TIMEOUT = int(os.getenv("LLM_TOTAL_TIMEOUT", "60"))
+        self.USER_SETTINGS_ENCRYPTION_KEY = os.getenv("USER_SETTINGS_ENCRYPTION_KEY", "")
+        self.ALLOWED_LLM_BASE_URLS = parse_list_from_env(
+            "ALLOWED_LLM_BASE_URLS",
+            ["https://api.deepseek.com"],
+        )
 
         # Long term memory Configuration
         self.LONG_TERM_MEMORY_MODEL = os.getenv("LONG_TERM_MEMORY_MODEL", "deepseek-v4-flash")
@@ -237,6 +242,8 @@ class Settings:
             "health": ["20 per minute"],
             "session": ["30 per minute"],
             "sessions": ["60 per minute"],
+            "user_settings": ["30 per minute"],
+            "user_settings_test": ["5 per minute"],
         }
 
         # Update rate limit endpoints from environment variables
@@ -268,11 +275,13 @@ class Settings:
             "POSTGRES_PASSWORD": self.POSTGRES_PASSWORD,
             "DEEPSEEK_API_KEY": self.DEEPSEEK_API_KEY,
             "SILICONFLOW_API_KEY": self.SILICONFLOW_API_KEY,
+            "USER_SETTINGS_ENCRYPTION_KEY": self.USER_SETTINGS_ENCRYPTION_KEY,
         }
+        minimum_lengths = {"USER_SETTINGS_ENCRYPTION_KEY": 32}
         invalid = [
             name
             for name, value in secrets.items()
-            if len(value) < 24 or any(marker in value.lower() for marker in invalid_markers)
+            if len(value) < minimum_lengths.get(name, 24) or any(marker in value.lower() for marker in invalid_markers)
         ]
         if invalid:
             raise RuntimeError(f"production secrets are missing or weak: {', '.join(invalid)}")

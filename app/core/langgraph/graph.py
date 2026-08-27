@@ -54,9 +54,10 @@ from app.schemas import (
     GraphState,
     Message,
 )
-from app.services.llm import llm_service
+from app.services.llm import LLMService
 from app.services.memory import memory_service
-from app.utils import (
+from app.services.user_llm_settings import user_llm_settings_service
+from app.utils.graph import (
     dump_messages,
     extract_text_content,
     prepare_messages,
@@ -75,9 +76,6 @@ class LangGraphAgent:
 
     def __init__(self):
         """Initialize the LangGraph Agent with necessary components."""
-        # Use the LLM service with tools bound
-        self.llm_service = llm_service
-        self.llm_service.bind_tools(tools)
         self.tools_by_name = {tool.name: tool for tool in tools}
         self._connection_pool: Optional[PostgresConnPool] = None
         self._graph: Optional[CompiledStateGraph] = None
@@ -137,14 +135,12 @@ class LangGraphAgent:
         Returns:
             Command: Command object with updated state and next node to execute.
         """
-        # Get the current LLM instance for metrics
-        current_llm = self.llm_service.get_llm()
-        model_name = (
-            current_llm.model_name
-            if current_llm and hasattr(current_llm, "model_name")
-            else settings.DEFAULT_LLM_MODEL
-        )
-
+        user_id = config.get("metadata", {}).get("user_id")
+        if user_id is None:
+            raise RuntimeError("authenticated user context is required for LLM execution")
+        runtime = await user_llm_settings_service.get_runtime(int(user_id))
+        request_llm_service = LLMService(runtime).bind_tools(tools)
+        model_name = runtime.model
         username = config.get("metadata", {}).get("username")
         reasoning_effort = config.get("metadata", {}).get("reasoning_effort", "off")
         thread_id = config.get("configurable", {}).get("thread_id")
@@ -156,12 +152,15 @@ class LangGraphAgent:
         try:
             # Use LLM service with automatic retries and circular fallback
             with llm_inference_duration_seconds.labels(model=model_name).time():
+                thinking_enabled = runtime.thinking_enabled and reasoning_effort in ("high", "max")
                 model_options: dict[str, Any] = {
-                    "extra_body": {"thinking": {"type": "disabled" if reasoning_effort == "off" else "enabled"}}
+                    "extra_body": {"thinking": {"type": "enabled" if thinking_enabled else "disabled"}}
                 }
-                if reasoning_effort in ("high", "max"):
+                if thinking_enabled:
                     model_options["reasoning_effort"] = reasoning_effort
-                response_message = await self.llm_service.call(dump_messages(messages), **model_options)
+                else:
+                    model_options["temperature"] = runtime.temperature
+                response_message = await request_llm_service.call(dump_messages(messages), **model_options)
 
             # Process response to handle structured content blocks
             response_message = process_llm_response(response_message)
@@ -388,7 +387,10 @@ class LangGraphAgent:
         graph = await self._get_graph()
 
         try:
-            yield {"type": "meta", "data": {"model": settings.DEFAULT_LLM_MODEL, "reasoning_effort": reasoning_effort}}
+            runtime = await user_llm_settings_service.get_runtime(int(user_id)) if user_id is not None else None
+            model_name = runtime.model if runtime else "unconfigured"
+            effective_effort = reasoning_effort if runtime and runtime.thinking_enabled else "off"
+            yield {"type": "meta", "data": {"model": model_name, "reasoning_effort": effective_effort}}
             yield {"type": "stage", "data": {"stage": "memory", "status": "started"}}
             state, relevant_memory = await asyncio.gather(
                 graph.aget_state(config),

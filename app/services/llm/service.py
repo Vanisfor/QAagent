@@ -21,7 +21,7 @@ from openai import (
     OpenAIError,
     RateLimitError,
 )
-from pydantic import BaseModel
+from pydantic import BaseModel, SecretStr
 from tenacity import (
     before_sleep_log,
     retry,
@@ -35,6 +35,7 @@ from app.core.logging import logger
 from app.core.token_usage import extract_token_usage
 from app.core.tracing import trace_span
 from app.services.llm.registry import LLMRegistry
+from app.services.user_llm_settings import UserLLMRuntimeConfig
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -53,29 +54,45 @@ class LLMService:
       concurrent default-path calls are never affected.
     """
 
-    def __init__(self):
-        """Initialize the LLM service with the configured default model."""
+    def __init__(self, runtime_config: UserLLMRuntimeConfig | None = None):
+        """Initialize a platform-default or request-scoped LLM service."""
         self._llm: Any = None  # BaseChatModel pre-bind_tools, Runnable after
         self._current_model_index: int = 0
         self._bound_tools: List = []
+        self._default_model = runtime_config.model if runtime_config else settings.DEFAULT_LLM_MODEL
+        self._runtime_model_kwargs: dict[str, Any] = {}
+        if runtime_config is not None:
+            self._runtime_model_kwargs = {
+                "api_key": SecretStr(runtime_config.api_key),
+                "base_url": runtime_config.base_url,
+                "max_tokens": runtime_config.max_tokens,
+            }
 
         all_names = LLMRegistry.get_all_names()
         try:
-            self._current_model_index = all_names.index(settings.DEFAULT_LLM_MODEL)
-            self._llm = LLMRegistry.get(settings.DEFAULT_LLM_MODEL)
+            self._current_model_index = all_names.index(self._default_model)
+            self._llm = LLMRegistry.get(self._default_model, **self._runtime_model_kwargs)
             logger.info(
                 "llm_service_initialized",
-                default_model=settings.DEFAULT_LLM_MODEL,
+                default_model=self._default_model,
                 model_index=self._current_model_index,
                 total_models=len(all_names),
                 environment=settings.ENVIRONMENT.value,
+                credential_scope="user" if runtime_config else "platform",
             )
         except Exception as e:
+            if runtime_config is not None:
+                logger.exception(
+                    "user_llm_service_initialization_failed",
+                    model=self._default_model,
+                    error_type=type(e).__name__,
+                )
+                raise
             self._current_model_index = 0
             self._llm = LLMRegistry.LLMS[0]["llm"]
             logger.warning(
                 "default_model_not_found_using_first",
-                requested=settings.DEFAULT_LLM_MODEL,
+                requested=self._default_model,
                 using=all_names[0] if all_names else "none",
                 error=str(e),
             )
@@ -131,7 +148,7 @@ class LLMService:
             RuntimeError: When all models fail after retries or the total
                 timeout budget is exceeded.
         """
-        resolved_model = model_name or settings.DEFAULT_LLM_MODEL
+        resolved_model = model_name or self._default_model
         with trace_span("llm.invoke", model=resolved_model) as span:
             try:
                 response = await asyncio.wait_for(
@@ -233,7 +250,7 @@ class LLMService:
                 to_model=next_entry["name"],
             )
             self._current_model_index = next_index
-            self._llm = next_entry["llm"]
+            self._llm = LLMRegistry.get(next_entry["name"], **self._runtime_model_kwargs)
             if self._bound_tools:
                 self._llm = self._llm.bind_tools(self._bound_tools)
             logger.info("model_switched", new_model=next_entry["name"], new_index=next_index)
@@ -261,7 +278,8 @@ class LLMService:
         """
 
         def _override_target(idx: int) -> Any:
-            base = LLMRegistry.get(LLMRegistry.LLMS[idx]["name"], **model_kwargs)
+            options = {**self._runtime_model_kwargs, **model_kwargs}
+            base = LLMRegistry.get(LLMRegistry.LLMS[idx]["name"], **options)
             if response_format:
                 return base.with_structured_output(response_format)
             return base.bind_tools(self._bound_tools) if self._bound_tools else base
