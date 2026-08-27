@@ -32,3 +32,36 @@ export interface StageItem {
 }
 
 export interface CacheStats { hits: number; misses: number; hitRate: number; scope: string }
+
+export interface SessionSummary {
+  sessionId: string;
+  name: string;
+  token: string;
+}
+
+export interface HistoryMessage {
+  role: "user" | "assistant";
+  content: string;
+}
+
+export interface LLMSettings {
+  configured: boolean;
+  provider: "deepseek";
+  model: string;
+  base_url: string;
+  api_key_masked: string | null;
+  temperature: number;
+  max_tokens: number;
+  thinking_enabled: boolean;
+  validated_at: string | null;
+}
+
+export interface LLMSettingsInput {
+  provider: "deepseek";
+  model: string;
+  base_url: string;
+  api_key?: string;
+  temperature: number;
+  max_tokens: number;
+  thinking_enabled: boolean;
+}
