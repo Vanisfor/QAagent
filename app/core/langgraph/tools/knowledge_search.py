@@ -41,7 +41,7 @@ async def knowledge_search(query: str, top_k: int = 5) -> str:
         return "The knowledge base is not configured yet. Answer using web search or your own knowledge."
     except Exception as e:
         logger.exception("knowledge_search_failed", error=str(e), query_length=len(query))
-        return "Knowledge base search failed. Answer using web search or your own knowledge."
+        raise
 
     if not hits:
         return "No relevant information found in the knowledge base. Answer from web search or your own knowledge."

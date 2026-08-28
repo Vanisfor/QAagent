@@ -86,6 +86,9 @@ eval-quick:
 eval-no-report:
 	@$(call run_with_env,python -m evals.main --no-report)
 
+load-test-sse:
+	uv run python scripts/load_test_sse.py --levels 20 50 100
+
 # ---------------------------------------------------------------------------
 # Code quality
 # ---------------------------------------------------------------------------
@@ -190,6 +193,7 @@ help:
 	@echo "  eval                 Run evals (interactive)"
 	@echo "  eval-quick           Run evals (default settings)"
 	@echo "  eval-no-report       Run evals without report"
+	@echo "  load-test-sse        Run real 20/50/100 concurrent SSE sessions"
 	@echo ""
 	@echo "Code quality:"
 	@echo "  lint                 Ruff lint check"
@@ -219,7 +223,7 @@ help:
 .PHONY: install dev staging prod _serve \
         migrate migration migrate-downgrade migrate-history \
         ingest \
-        eval eval-quick eval-no-report \
+        eval eval-quick eval-no-report load-test-sse \
         lint format typecheck check pre-commit pre-commit-update \
         docker-build docker-up docker-down docker-logs docker-migrate \
         docker-migrate-downgrade docker-migrate-history \

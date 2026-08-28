@@ -8,11 +8,23 @@ from app.core.config import settings
 from app.core.logging import logger
 from app.schemas import Message
 
-# Cache tiktoken encoding at module level — thread-safe and reusable
+# DeepSeek model names are not mapped by tiktoken. Avoid an import-time network
+# download for OpenAI's fallback vocabulary; use a conservative local estimate.
 try:
-    _TIKTOKEN_ENCODING = tiktoken.encoding_for_model(settings.DEFAULT_LLM_MODEL)
+    _TIKTOKEN_ENCODING = (
+        None
+        if settings.DEFAULT_LLM_MODEL.startswith("deepseek-")
+        else tiktoken.encoding_for_model(settings.DEFAULT_LLM_MODEL)
+    )
 except KeyError:
-    _TIKTOKEN_ENCODING = tiktoken.get_encoding("cl100k_base")
+    _TIKTOKEN_ENCODING = None
+
+
+def _encoded_length(value: str) -> int:
+    """Count tokens locally without requiring a vocabulary download."""
+    if _TIKTOKEN_ENCODING is not None:
+        return len(_TIKTOKEN_ENCODING.encode(value))
+    return max(1, (len(value.encode("utf-8")) + 3) // 4)
 
 
 def _count_tokens_tiktoken(messages: list) -> int:
@@ -24,17 +36,17 @@ def _count_tokens_tiktoken(messages: list) -> int:
         if isinstance(message, dict):
             for _, value in message.items():
                 if isinstance(value, str):
-                    num_tokens += len(_TIKTOKEN_ENCODING.encode(value))
+                    num_tokens += _encoded_length(value)
         elif isinstance(message, BaseMessage):
             content = message.content
             if isinstance(content, str):
-                num_tokens += len(_TIKTOKEN_ENCODING.encode(content))
+                num_tokens += _encoded_length(content)
             elif isinstance(content, list):
                 for block in content:
                     if isinstance(block, str):
-                        num_tokens += len(_TIKTOKEN_ENCODING.encode(block))
+                        num_tokens += _encoded_length(block)
                     elif isinstance(block, dict) and "text" in block:
-                        num_tokens += len(_TIKTOKEN_ENCODING.encode(block["text"]))
+                        num_tokens += _encoded_length(block["text"])
     num_tokens += 2  # every reply is primed with assistant
     return num_tokens
 

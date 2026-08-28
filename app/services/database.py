@@ -1,20 +1,11 @@
 """This file contains the database service for the application."""
 
-from typing import (
-    List,
-    Optional,
-)
-
-from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import (
     async_sessionmaker,
     create_async_engine,
 )
 from sqlalchemy.exc import SQLAlchemyError
-from sqlmodel import (
-    col,
-    select,
-)
+from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.core.config import (
@@ -24,6 +15,7 @@ from app.core.config import (
 from app.core.logging import logger
 from app.models.session import Session as ChatSession
 from app.models.user import User
+from app.repositories import CheckpointRepository, SessionRepository, UserRepository
 
 
 class DatabaseService:
@@ -55,6 +47,9 @@ class DatabaseService:
                 pool_recycle=1800,  # Recycle connections after 30 minutes
             )
             self.session_factory = async_sessionmaker(self.engine, class_=AsyncSession, expire_on_commit=False)
+            checkpoints = CheckpointRepository()
+            self.users = UserRepository(self.session_factory)
+            self.sessions = SessionRepository(self.session_factory, checkpoints)
 
             logger.info(
                 "database_initialized",
@@ -79,15 +74,9 @@ class DatabaseService:
         Returns:
             User: The created user
         """
-        async with self.session_factory() as session:
-            user = User(email=email, hashed_password=password, username=username)
-            session.add(user)
-            await session.commit()
-            await session.refresh(user)
-            logger.info("user_created", email=email)
-            return user
+        return await self.users.create(email, password, username)
 
-    async def get_user(self, user_id: int) -> Optional[User]:
+    async def get_user(self, user_id: int) -> User | None:
         """Get a user by ID.
 
         Args:
@@ -96,11 +85,9 @@ class DatabaseService:
         Returns:
             Optional[User]: The user if found, None otherwise
         """
-        async with self.session_factory() as session:
-            user = await session.get(User, user_id)
-            return user
+        return await self.users.get(user_id)
 
-    async def get_user_by_email(self, email: str) -> Optional[User]:
+    async def get_user_by_email(self, email: str) -> User | None:
         """Get a user by email.
 
         Args:
@@ -109,10 +96,7 @@ class DatabaseService:
         Returns:
             Optional[User]: The user if found, None otherwise
         """
-        async with self.session_factory() as session:
-            statement = select(User).where(User.email == email)
-            user = (await session.exec(statement)).first()
-            return user
+        return await self.users.get_by_email(email)
 
     async def delete_user_by_email(self, email: str) -> bool:
         """Delete a user by email.
@@ -123,15 +107,7 @@ class DatabaseService:
         Returns:
             bool: True if deletion was successful, False if user not found
         """
-        async with self.session_factory() as session:
-            user = (await session.exec(select(User).where(User.email == email))).first()
-            if not user:
-                return False
-
-            await session.delete(user)
-            await session.commit()
-            logger.info("user_deleted", email=email)
-            return True
+        return await self.users.delete_by_email(email)
 
     async def create_session(
         self, session_id: str, user_id: int, name: str = "", username: str | None = None
@@ -147,13 +123,7 @@ class DatabaseService:
         Returns:
             ChatSession: The created session
         """
-        async with self.session_factory() as session:
-            chat_session = ChatSession(id=session_id, user_id=user_id, name=name, username=username)
-            session.add(chat_session)
-            await session.commit()
-            await session.refresh(chat_session)
-            logger.info("session_created", session_id=session_id, user_id=user_id, name=name)
-            return chat_session
+        return await self.sessions.create(session_id, user_id, name, username)
 
     async def delete_session(self, session_id: str) -> bool:
         """Delete a session by ID.
@@ -164,17 +134,13 @@ class DatabaseService:
         Returns:
             bool: True if deletion was successful, False if session not found
         """
-        async with self.session_factory() as session:
-            chat_session = await session.get(ChatSession, session_id)
-            if not chat_session:
-                return False
+        return await self.sessions.delete_with_checkpoints(session_id)
 
-            await session.delete(chat_session)
-            await session.commit()
-            logger.info("session_deleted", session_id=session_id)
-            return True
+    async def clear_checkpoints(self, session_id: str) -> None:
+        """Clear LangGraph checkpoints for a session without deleting it."""
+        await self.sessions.clear_checkpoints(session_id)
 
-    async def get_session(self, session_id: str) -> Optional[ChatSession]:
+    async def get_session(self, session_id: str) -> ChatSession | None:
         """Get a session by ID.
 
         Args:
@@ -183,11 +149,9 @@ class DatabaseService:
         Returns:
             Optional[ChatSession]: The session if found, None otherwise
         """
-        async with self.session_factory() as session:
-            chat_session = await session.get(ChatSession, session_id)
-            return chat_session
+        return await self.sessions.get(session_id)
 
-    async def get_user_sessions(self, user_id: int) -> List[ChatSession]:
+    async def get_user_sessions(self, user_id: int) -> list[ChatSession]:
         """Get all sessions for a user.
 
         Args:
@@ -196,12 +160,7 @@ class DatabaseService:
         Returns:
             List[ChatSession]: List of user's sessions
         """
-        async with self.session_factory() as session:
-            statement = (
-                select(ChatSession).where(col(ChatSession.user_id) == user_id).order_by(col(ChatSession.created_at))
-            )
-            sessions = (await session.exec(statement)).all()
-            return list(sessions)
+        return await self.sessions.list_for_user(user_id)
 
     async def update_session_name(self, session_id: str, name: str) -> ChatSession:
         """Update a session's name.
@@ -216,17 +175,7 @@ class DatabaseService:
         Raises:
             HTTPException: If session is not found
         """
-        async with self.session_factory() as session:
-            chat_session = await session.get(ChatSession, session_id)
-            if not chat_session:
-                raise HTTPException(status_code=404, detail="Session not found")
-
-            chat_session.name = name
-            session.add(chat_session)
-            await session.commit()
-            await session.refresh(chat_session)
-            logger.info("session_name_updated", session_id=session_id, name=name)
-            return chat_session
+        return await self.sessions.update_name(session_id, name)
 
     def get_session_maker(self):
         """Get a session maker for creating database sessions.

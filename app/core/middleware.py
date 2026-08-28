@@ -47,6 +47,13 @@ else:
         PYINSTRUMENT_AVAILABLE = False
 
 
+def route_template(request: Request) -> str:
+    """Return a bounded-cardinality route template for metrics and traces."""
+    route = request.scope.get("route")
+    path = getattr(route, "path", None)
+    return str(path) if path else "__unmatched__"
+
+
 class MetricsMiddleware(BaseHTTPMiddleware):
     """Middleware for tracking HTTP request metrics."""
 
@@ -72,10 +79,10 @@ class MetricsMiddleware(BaseHTTPMiddleware):
         finally:
             duration = time.time() - start_time
 
-            # Record metrics
-            http_requests_total.labels(method=request.method, endpoint=request.url.path, status=status_code).inc()
+            endpoint = route_template(request)
+            http_requests_total.labels(method=request.method, endpoint=endpoint, status=status_code).inc()
 
-            http_request_duration_seconds.labels(method=request.method, endpoint=request.url.path).observe(duration)
+            http_request_duration_seconds.labels(method=request.method, endpoint=endpoint).observe(duration)
 
         return response
 

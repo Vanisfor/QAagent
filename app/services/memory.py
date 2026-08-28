@@ -135,6 +135,7 @@ class MemoryService:
             except Exception as e:
                 span.record_error(e)
                 logger.exception("failed_to_update_long_term_memory", user_id=user_id, error=str(e))
+                raise
 
 
 memory_service = MemoryService()

@@ -7,7 +7,6 @@ from typing import (
     Optional,
     cast,
 )
-from urllib.parse import quote_plus
 
 from langchain_core.messages import (
     AIMessage,
@@ -16,7 +15,6 @@ from langchain_core.messages import (
     ToolMessage,
     convert_to_openai_messages,
 )
-from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.errors import GraphInterrupt
 from langgraph.graph import (
     END,
@@ -27,28 +25,16 @@ from langgraph.graph.state import (
     Command,
     CompiledStateGraph,
 )
-from langgraph.types import (
-    RetryPolicy,
-    StateSnapshot,
-)
-from psycopg import (
-    AsyncConnection,
-    sql,
-)
-from psycopg.rows import (
-    DictRow,
-    dict_row,
-)
-from psycopg_pool import AsyncConnectionPool
-
+from langgraph.types import StateSnapshot
 from app.core.config import (
     Environment,
     settings,
 )
 from app.core.langgraph.tools import tools
+from app.core.langgraph.checkpoints import CheckpointService
+from app.core.langgraph.tool_executor import ToolExecutor
 from app.core.logging import logger
 from app.core.metrics import llm_inference_duration_seconds
-from app.core.tracing import trace_span
 from app.core.prompts import load_system_prompt
 from app.schemas import (
     GraphState,
@@ -56,6 +42,8 @@ from app.schemas import (
 )
 from app.services.llm import LLMService
 from app.services.memory import memory_service
+from app.services.memory_jobs import memory_job_service
+from app.services.database import database_service
 from app.services.user_llm_settings import user_llm_settings_service
 from app.utils.graph import (
     dump_messages,
@@ -63,8 +51,6 @@ from app.utils.graph import (
     prepare_messages,
     process_llm_response,
 )
-
-PostgresConnPool = AsyncConnectionPool[AsyncConnection[DictRow]]
 
 
 class LangGraphAgent:
@@ -77,7 +63,8 @@ class LangGraphAgent:
     def __init__(self):
         """Initialize the LangGraph Agent with necessary components."""
         self.tools_by_name = {tool.name: tool for tool in tools}
-        self._connection_pool: Optional[PostgresConnPool] = None
+        self.tool_executor = ToolExecutor()
+        self.checkpoints = CheckpointService()
         self._graph: Optional[CompiledStateGraph] = None
         logger.info(
             "langgraph_agent_initialized",
@@ -85,45 +72,14 @@ class LangGraphAgent:
             environment=settings.ENVIRONMENT.value,
         )
 
-    async def _get_connection_pool(self) -> Optional[PostgresConnPool]:
-        """Get a PostgreSQL connection pool using environment-specific settings.
+    @property
+    def is_ready(self) -> bool:
+        """Return whether the graph and its checkpoint pool are initialized."""
+        return self._graph is not None and self.checkpoints.is_ready
 
-        Returns:
-            AsyncConnectionPool or None when the pool fails to initialise in
-            production (the app keeps running in a degraded mode).
-        """
-        if self._connection_pool is None:
-            try:
-                # Configure pool size based on environment
-                max_size = settings.POSTGRES_POOL_SIZE
-
-                connection_url = (
-                    "postgresql://"
-                    f"{quote_plus(settings.POSTGRES_USER)}:{quote_plus(settings.POSTGRES_PASSWORD)}"
-                    f"@{settings.POSTGRES_HOST}:{settings.POSTGRES_PORT}/{settings.POSTGRES_DB}"
-                )
-
-                self._connection_pool = AsyncConnectionPool(
-                    connection_url,
-                    open=False,
-                    max_size=max_size,
-                    kwargs={
-                        "autocommit": True,
-                        "connect_timeout": 5,
-                        "prepare_threshold": None,
-                        "row_factory": dict_row,
-                    },
-                )
-                await self._connection_pool.open()
-                logger.info("connection_pool_created", max_size=max_size, environment=settings.ENVIRONMENT.value)
-            except Exception as e:
-                logger.error("connection_pool_creation_failed", error=str(e), environment=settings.ENVIRONMENT.value)
-                # In production, we might want to degrade gracefully
-                if settings.ENVIRONMENT == Environment.PRODUCTION:
-                    logger.warning("continuing_without_connection_pool", environment=settings.ENVIRONMENT.value)
-                    return None
-                raise e
-        return self._connection_pool
+    async def close(self) -> None:
+        """Close agent-owned resources."""
+        await self.checkpoints.close()
 
     async def _chat(self, state: GraphState, config: RunnableConfig) -> Command:
         """Process the chat state and generate a response.
@@ -200,20 +156,7 @@ class LangGraphAgent:
         """
         tool_calls = state.messages[-1].tool_calls
 
-        async def _execute_tool(tool_call: dict) -> ToolMessage:
-            with trace_span("tool.execute", tool_name=tool_call["name"]):
-                tool_result = await self.tools_by_name[tool_call["name"]].ainvoke(tool_call["args"])
-            return ToolMessage(
-                content=tool_result,
-                name=tool_call["name"],
-                tool_call_id=tool_call["id"],
-            )
-
-        # Execute tool calls concurrently when multiple are requested
-        if len(tool_calls) == 1:
-            outputs = [await _execute_tool(tool_calls[0])]
-        else:
-            outputs = list(await asyncio.gather(*[_execute_tool(tc) for tc in tool_calls]))
+        outputs = await self.tool_executor.execute_many(tool_calls, self.tools_by_name)
 
         return Command(update={"messages": outputs}, goto="chat")
 
@@ -231,21 +174,17 @@ class LangGraphAgent:
                     "tool_call",
                     self._tool_call,
                     destinations=("chat",),
-                    retry_policy=RetryPolicy(max_attempts=3),
                 )
                 graph_builder.set_entry_point("chat")
                 graph_builder.set_finish_point("chat")
 
                 # Get connection pool (may be None in production if DB unavailable)
-                connection_pool = await self._get_connection_pool()
-                if connection_pool:
-                    checkpointer = AsyncPostgresSaver(connection_pool)
-                    await checkpointer.setup()
-                else:
+                checkpointer = await self.checkpoints.create_saver()
+                if checkpointer is None:
                     # In production, proceed without checkpointer if needed
                     checkpointer = None
                     if settings.ENVIRONMENT != Environment.PRODUCTION:
-                        raise Exception("Connection pool initialization failed")
+                        raise RuntimeError("checkpoint pool initialization failed")
 
                 self._graph = graph_builder.compile(
                     checkpointer=checkpointer, name=f"{settings.PROJECT_NAME} Agent ({settings.ENVIRONMENT.value})"
@@ -342,7 +281,7 @@ class LangGraphAgent:
                 return [Message(role="assistant", content=str(interrupt_value))]
 
             openai_msgs = cast(list[dict], convert_to_openai_messages(response["messages"]))
-            asyncio.create_task(memory_service.add(user_id, openai_msgs, config.get("metadata")))
+            await memory_job_service.enqueue(user_id, openai_msgs, config.get("metadata"))
             return self.__process_messages(response["messages"])
         except GraphInterrupt:
             state = await graph.aget_state(config)
@@ -439,7 +378,7 @@ class LangGraphAgent:
                 yield {"type": "answer_delta", "content": str(interrupt_value), "data": {}}
             elif state.values and "messages" in state.values:
                 openai_msgs = cast(list[dict], convert_to_openai_messages(state.values["messages"]))
-                asyncio.create_task(memory_service.add(user_id, openai_msgs, config.get("metadata")))
+                await memory_job_service.enqueue(user_id, openai_msgs, config.get("metadata"))
         except GraphInterrupt:
             state = await graph.aget_state(config)
             interrupt_value = state.tasks[0].interrupts[0].value if state.tasks else "Waiting for input."
@@ -483,27 +422,9 @@ class LangGraphAgent:
             Exception: If there's an error clearing the chat history.
         """
         try:
-            # Make sure the pool is initialized in the current event loop
-            conn_pool = await self._get_connection_pool()
-            if conn_pool is None:
-                raise RuntimeError("connection pool unavailable; cannot clear chat history")
-
-            # Batch all DELETEs in a single pipeline round-trip
-            async with conn_pool.connection() as conn:
-                async with conn.pipeline():
-                    for table in settings.CHECKPOINT_TABLES:
-                        await conn.execute(
-                            sql.SQL("DELETE FROM {} WHERE thread_id = %s").format(sql.Identifier(table)),
-                            (session_id,),
-                        )
-                logger.info(
-                    "checkpoint_tables_cleared_for_session",
-                    tables=settings.CHECKPOINT_TABLES,
-                    session_id=session_id,
-                )
-
+            await database_service.clear_checkpoints(session_id)
         except Exception as e:
-            logger.error(
+            logger.exception(
                 "clear_chat_history_operation_failed",
                 session_id=session_id,
                 error=str(e),

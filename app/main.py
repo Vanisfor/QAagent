@@ -1,7 +1,7 @@
 """This file contains the main application entry point."""
 
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import UTC, datetime
 
 from dotenv import load_dotenv
 from fastapi import (
@@ -33,6 +33,7 @@ from app.core.middleware import (
 from app.services.database import database_service
 from app.services.knowledge import knowledge_service
 from app.services.memory import memory_service
+from app.services.memory_jobs import memory_job_service
 
 # Load environment variables
 load_dotenv()
@@ -69,6 +70,11 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.exception("memory_service_pre_warm_failed", error=str(e))
 
+    try:
+        await memory_job_service.start()
+    except Exception as e:
+        logger.exception("memory_job_worker_start_failed", error=str(e))
+
     # Pre-create the RAG knowledge base connection pool so the first
     # knowledge_search tool call doesn't pay cold-start latency.
     try:
@@ -82,11 +88,10 @@ async def lifespan(app: FastAPI):
     # Cleanup on shutdown
     await cache_service.close()
     await knowledge_service.close()
+    await memory_job_service.stop()
     await database_service.engine.dispose()
     close_trace_writer()
-    if agent._connection_pool:
-        await agent._connection_pool.close()
-        logger.info("connection_pool_closed")
+    await agent.close()
     logger.info("application_shutdown")
 
 
@@ -182,26 +187,50 @@ async def root(request: Request):
 @app.get("/health")
 @limiter.limit(settings.RATE_LIMIT_ENDPOINTS["health"][0])
 async def health_check(request: Request) -> JSONResponse:
-    """Health check endpoint with environment-specific information.
+    """Backward-compatible readiness endpoint.
 
     Returns:
         JSONResponse: Health status payload, with HTTP 503 when the
         database is unreachable so load balancers can drop the instance.
     """
+    del request
     logger.info("health_check_called")
+    return await _readiness_response()
 
-    # Check database connectivity
-    db_healthy = await database_service.health_check()
 
+@app.get("/live")
+async def liveness_check() -> JSONResponse:
+    """Report whether the API process is alive without probing dependencies."""
+    return JSONResponse(
+        content={
+            "status": "alive",
+            "version": settings.VERSION,
+            "timestamp": datetime.now(UTC).isoformat(),
+        }
+    )
+
+
+async def _readiness_response() -> JSONResponse:
+    """Build the dependency-aware readiness response."""
+    database_ready = await database_service.health_check()
+    graph_ready = agent.is_ready
+    ready = database_ready and graph_ready
     response = {
-        "status": "healthy" if db_healthy else "degraded",
+        "status": "ready" if ready else "not_ready",
         "version": settings.VERSION,
         "environment": settings.ENVIRONMENT.value,
-        "components": {"api": "healthy", "database": "healthy" if db_healthy else "unhealthy"},
-        "timestamp": datetime.now().isoformat(),
+        "components": {
+            "api": "ready",
+            "database": "ready" if database_ready else "not_ready",
+            "graph": "ready" if graph_ready else "not_ready",
+        },
+        "timestamp": datetime.now(UTC).isoformat(),
     }
-
-    # If DB is unhealthy, set the appropriate status code
-    status_code = status.HTTP_200_OK if db_healthy else status.HTTP_503_SERVICE_UNAVAILABLE
-
+    status_code = status.HTTP_200_OK if ready else status.HTTP_503_SERVICE_UNAVAILABLE
     return JSONResponse(content=response, status_code=status_code)
+
+
+@app.get("/ready")
+async def readiness_check() -> JSONResponse:
+    """Report whether required dependencies can serve agent traffic."""
+    return await _readiness_response()
