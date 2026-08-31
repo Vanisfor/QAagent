@@ -8,6 +8,7 @@ from app.core.logging import logger
 from app.core.tracing import trace_span
 from app.schemas.knowledge import KnowledgeHit, RetrievalContext
 from app.schemas.retrieval import RetrievalBundle, RetrievalIntent
+from app.services.evidence_evaluator import EvidenceEvaluatorService, evidence_evaluator_service
 from app.services.knowledge import KnowledgeService, _reciprocal_rank_fusion, knowledge_service
 from app.services.knowledge_graph import KnowledgeGraphService, knowledge_graph_service
 from app.services.query_planner import QueryPlannerService, query_planner_service
@@ -22,11 +23,15 @@ class ExplicitRetrievalPipeline:
         planner: QueryPlannerService,
         knowledge: KnowledgeService,
         graph: KnowledgeGraphService,
+        evaluator: EvidenceEvaluatorService,
+        max_loops: int = 2,
     ) -> None:
         """Inject planning and retrieval services."""
         self._planner = planner
         self._knowledge = knowledge
         self._graph = graph
+        self._evaluator = evaluator
+        self._max_loops = min(max(1, max_loops), 3)
 
     async def retrieve(
         self,
@@ -42,21 +47,38 @@ class ExplicitRetrievalPipeline:
         effective_context = context.model_copy(update={"space_slugs": tuple(plan.space_slugs)})
         per_query_k = min(max(top_k, settings.KNOWLEDGE_TOP_K), 20)
         with trace_span("retrieval.execute_plan", query_count=len(plan.queries), use_graph=plan.use_graph) as span:
-            rankings = await asyncio.gather(
-                *(
-                    self._knowledge.search(search_query, context=effective_context, top_k=per_query_k)
-                    for search_query in plan.queries
-                )
-            )
+            rankings: list[list[KnowledgeHit]] = []
             if plan.use_graph:
-                graph_hits = await self._graph.search(
-                    plan.entity_names,
-                    effective_context,
-                    top_k=per_query_k,
-                    max_hops=plan.max_hops,
+                rankings.append(
+                    await self._graph.search(
+                        plan.entity_names,
+                        effective_context,
+                        top_k=per_query_k,
+                        max_hops=plan.max_hops,
+                    )
                 )
-                rankings.append(graph_hits)
-
+            pending_queries = plan.queries
+            executed_queries: set[str] = set()
+            iterations = 0
+            assessment = None
+            while pending_queries and iterations < self._max_loops:
+                iterations += 1
+                executed_queries.update(pending_queries)
+                round_rankings = await asyncio.gather(
+                    *(
+                        self._knowledge.search(search_query, context=effective_context, top_k=per_query_k)
+                        for search_query in pending_queries
+                    )
+                )
+                rankings.extend(round_rankings)
+                round_hits = [hit for ranking in rankings for hit in ranking]
+                assessment = await self._evaluator.evaluate(query, plan, round_hits, runtime=runtime)
+                if assessment.sufficient:
+                    break
+                pending_queries = [
+                    rewrite for rewrite in assessment.rewritten_queries if rewrite not in executed_queries
+                ][:3]
+                plan = plan.model_copy(update={"queries": list(dict.fromkeys([*plan.queries, *pending_queries]))})
             candidates: dict[int, KnowledgeHit] = {}
             id_rankings: list[list[int]] = []
             for ranking in rankings:
@@ -88,6 +110,7 @@ class ExplicitRetrievalPipeline:
             ]
             span.set_attribute("hit_count", len(hits))
             span.set_attribute("ranking_count", len(rankings))
+            span.set_attribute("iterations", iterations)
         logger.info(
             "explicit_retrieval_completed",
             intent=intent,
@@ -95,7 +118,15 @@ class ExplicitRetrievalPipeline:
             hit_count=len(hits),
             graph_used=plan.use_graph,
         )
-        return RetrievalBundle(plan=plan, hits=hits)
+        if assessment is None:
+            assessment = await self._evaluator.evaluate(query, plan, hits, runtime=runtime)
+        return RetrievalBundle(plan=plan, hits=hits, assessment=assessment, iterations=iterations or 1)
 
 
-retrieval_pipeline = ExplicitRetrievalPipeline(query_planner_service, knowledge_service, knowledge_graph_service)
+retrieval_pipeline = ExplicitRetrievalPipeline(
+    query_planner_service,
+    knowledge_service,
+    knowledge_graph_service,
+    evidence_evaluator_service,
+    max_loops=settings.RETRIEVAL_MAX_LOOPS,
+)

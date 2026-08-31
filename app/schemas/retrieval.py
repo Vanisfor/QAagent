@@ -73,3 +73,23 @@ class RetrievalBundle(BaseModel):
 
     plan: QueryPlan
     hits: list[KnowledgeHit]
+    assessment: "EvidenceAssessment" = Field(
+        default_factory=lambda: EvidenceAssessment(sufficient=False, reason_code="not_evaluated")
+    )
+    iterations: int = Field(default=1, ge=1, le=3)
+
+
+class EvidenceAssessment(BaseModel):
+    """Structured decision controlling the bounded retrieval loop."""
+
+    model_config = {"extra": "forbid"}
+
+    sufficient: bool
+    reason_code: Literal["sufficient", "missing_evidence", "conflicting_evidence", "not_evaluated"]
+    rewritten_queries: list[str] = Field(default_factory=list, max_length=3)
+
+    @field_validator("rewritten_queries")
+    @classmethod
+    def _normalize_rewrites(cls, values: list[str]) -> list[str]:
+        """Remove empty duplicate rewrites while preserving order."""
+        return list(dict.fromkeys(value.strip() for value in values if value.strip()))
