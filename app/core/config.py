@@ -165,6 +165,7 @@ class Settings:
         self.MAX_LLM_CALL_RETRIES = int(os.getenv("MAX_LLM_CALL_RETRIES", "3"))
         self.LLM_TOTAL_TIMEOUT = int(os.getenv("LLM_TOTAL_TIMEOUT", "60"))
         self.USER_SETTINGS_ENCRYPTION_KEY = os.getenv("USER_SETTINGS_ENCRYPTION_KEY", "")
+        self.CONNECTOR_CREDENTIAL_ENCRYPTION_KEY = os.getenv("CONNECTOR_CREDENTIAL_ENCRYPTION_KEY", "")
         self.ALLOWED_LLM_BASE_URLS = parse_list_from_env(
             "ALLOWED_LLM_BASE_URLS",
             ["https://api.deepseek.com"],
@@ -178,6 +179,9 @@ class Settings:
         self.MEMORY_JOB_MAX_ATTEMPTS = int(os.getenv("MEMORY_JOB_MAX_ATTEMPTS", "5"))
         self.MEMORY_JOB_STALE_AFTER_SECONDS = int(os.getenv("MEMORY_JOB_STALE_AFTER_SECONDS", "300"))
         self.MEMORY_JOB_SHUTDOWN_TIMEOUT = float(os.getenv("MEMORY_JOB_SHUTDOWN_TIMEOUT", "10"))
+        self.KNOWLEDGE_SYNC_WORKER_ENABLED = os.getenv("KNOWLEDGE_SYNC_WORKER_ENABLED", "false").lower() == "true"
+        self.KNOWLEDGE_SYNC_POLL_SECONDS = float(os.getenv("KNOWLEDGE_SYNC_POLL_SECONDS", "5"))
+        self.KNOWLEDGE_SYNC_SHUTDOWN_TIMEOUT = float(os.getenv("KNOWLEDGE_SYNC_SHUTDOWN_TIMEOUT", "15"))
 
         # Knowledge Base / RAG Configuration (SiliconFlow free embeddings by default)
         self.SILICONFLOW_API_KEY = os.getenv("SILICONFLOW_API_KEY", "")
@@ -208,6 +212,7 @@ class Settings:
         self.RERANK_TIMEOUT = float(os.getenv("RERANK_TIMEOUT", "8"))
         self.RERANK_CANDIDATES = int(os.getenv("RERANK_CANDIDATES", "20"))
         self.KNOWLEDGE_GRAPH_MAX_CHUNKS = int(os.getenv("KNOWLEDGE_GRAPH_MAX_CHUNKS", "20"))
+        self.RETRIEVAL_MAX_LOOPS = int(os.getenv("RETRIEVAL_MAX_LOOPS", "2"))
 
         # Guard against invalid chunking configuration (would break the text splitter).
         if self.KNOWLEDGE_CHUNK_OVERLAP >= self.KNOWLEDGE_CHUNK_SIZE:
@@ -299,8 +304,9 @@ class Settings:
             "DEEPSEEK_API_KEY": self.DEEPSEEK_API_KEY,
             "SILICONFLOW_API_KEY": self.SILICONFLOW_API_KEY,
             "USER_SETTINGS_ENCRYPTION_KEY": self.USER_SETTINGS_ENCRYPTION_KEY,
+            "CONNECTOR_CREDENTIAL_ENCRYPTION_KEY": self.CONNECTOR_CREDENTIAL_ENCRYPTION_KEY,
         }
-        minimum_lengths = {"USER_SETTINGS_ENCRYPTION_KEY": 32}
+        minimum_lengths = {"USER_SETTINGS_ENCRYPTION_KEY": 32, "CONNECTOR_CREDENTIAL_ENCRYPTION_KEY": 32}
         invalid = [
             name
             for name, value in secrets.items()
