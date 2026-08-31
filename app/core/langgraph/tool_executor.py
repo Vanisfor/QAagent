@@ -5,6 +5,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from langchain_core.messages import ToolMessage
+from langchain_core.runnables import RunnableConfig
 from langchain_core.tools.base import BaseTool
 from langgraph.errors import GraphInterrupt
 from tenacity import AsyncRetrying, retry_if_exception_type, stop_after_attempt, wait_exponential
@@ -21,16 +22,18 @@ class ToolExecutor:
         self,
         tool_calls: list[dict[str, Any]],
         tools_by_name: Mapping[str, BaseTool],
+        config: RunnableConfig | None = None,
     ) -> list[ToolMessage]:
         """Execute all requested tools and preserve their call order."""
         if len(tool_calls) == 1:
-            return [await self.execute(tool_calls[0], tools_by_name)]
-        return list(await asyncio.gather(*(self.execute(call, tools_by_name) for call in tool_calls)))
+            return [await self.execute(tool_calls[0], tools_by_name, config)]
+        return list(await asyncio.gather(*(self.execute(call, tools_by_name, config) for call in tool_calls)))
 
     async def execute(
         self,
         tool_call: dict[str, Any],
         tools_by_name: Mapping[str, BaseTool],
+        config: RunnableConfig | None = None,
     ) -> ToolMessage:
         """Execute one tool with bounded time and safe retries."""
         tool_name = str(tool_call["name"])
@@ -61,10 +64,10 @@ class ToolExecutor:
                     ) as span:
                         span.set_attribute("attempt", attempt.retry_state.attempt_number)
                         if policy.timeout_seconds is None:
-                            result = await tool.ainvoke(tool_call["args"])
+                            result = await tool.ainvoke(tool_call["args"], config=config)
                         else:
                             async with asyncio.timeout(policy.timeout_seconds):
-                                result = await tool.ainvoke(tool_call["args"])
+                                result = await tool.ainvoke(tool_call["args"], config=config)
         except GraphInterrupt:
             raise
         except Exception as error:

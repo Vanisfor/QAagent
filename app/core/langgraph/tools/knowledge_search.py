@@ -7,17 +7,20 @@ FAQs, internal knowledge, etc.).
 """
 
 from langchain_core.tools import tool
+from langchain_core.runnables import RunnableConfig
 
 from app.core.logging import logger
 from app.core.evidence import build_evidence_block
 from app.services.knowledge import (
     KnowledgeBaseNotConfigured,
-    knowledge_service,
 )
+from app.services.retrieval_pipeline import retrieval_pipeline
+from app.services.user_llm_settings import user_llm_settings_service
+from app.schemas.knowledge import RetrievalContext
 
 
 @tool
-async def knowledge_search(query: str, top_k: int = 5) -> str:
+async def knowledge_search(query: str, config: RunnableConfig, top_k: int = 5) -> str:
     """Search the local knowledge base for passages relevant to the question.
 
     Use this tool FIRST whenever the user asks about facts, documents,
@@ -27,6 +30,7 @@ async def knowledge_search(query: str, top_k: int = 5) -> str:
 
     Args:
         query: The search query, usually the user's question verbatim.
+        config: Server-provided authenticated runtime metadata.
         top_k: How many passages to return (1-10, default 5).
 
     Returns:
@@ -35,16 +39,25 @@ async def knowledge_search(query: str, top_k: int = 5) -> str:
     """
     k = max(1, min(top_k, 10))
     try:
-        hits = await knowledge_service.search(query, top_k=k)
+        context = RetrievalContext.from_config(config)
+        runtime = await user_llm_settings_service.get_runtime(int(context.user_id))
+        bundle = await retrieval_pipeline.retrieve(query, context, runtime, intent="qa", top_k=k)
+        hits = bundle.hits
     except KnowledgeBaseNotConfigured as e:
         logger.warning("knowledge_search_not_configured", error=str(e))
-        return "The knowledge base is not configured yet. Answer using web search or your own knowledge."
+        return (
+            "The internal knowledge base is unavailable. Do not answer internal-company questions "
+            "from general model knowledge. Use web search only for explicitly public information."
+        )
     except Exception as e:
         logger.exception("knowledge_search_failed", error=str(e), query_length=len(query))
         raise
 
     if not hits:
-        return "No relevant information found in the knowledge base. Answer from web search or your own knowledge."
+        return (
+            "No accessible internal evidence was found. Say that the requested information was not found "
+            "in the user's authorized knowledge spaces; do not infer private facts from general model knowledge."
+        )
 
     logger.info("knowledge_search_tool_used", hits=len(hits), query_length=len(query))
     return build_evidence_block(hits)

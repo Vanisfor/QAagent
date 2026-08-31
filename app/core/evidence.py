@@ -31,8 +31,10 @@ def build_evidence_block(hits: Iterable[KnowledgeHit]) -> str:
     for index, hit in enumerate(hits, start=1):
         content, risky = sanitize_evidence_text(hit.content)
         risk = "true" if risky else "false"
+        relevance = hit.score if hit.score > 0 else hit.similarity
         documents.append(
-            f'<doc id="{index}" source="{hit.source}" relevance="{hit.similarity:.2f}" risky="{risk}">\n'
+            f'<doc id="{index}" source="{hit.source}" space="{hit.space_slug}" '
+            f'relevance="{relevance:.2f}" risky="{risk}">\n'
             f"{content}\n</doc>"
         )
     return "<evidence>\n" + "\n\n".join(documents) + "\n</evidence>"
