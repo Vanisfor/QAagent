@@ -34,8 +34,8 @@ config.set_main_option("sqlalchemy.url", DATABASE_URL)
 # Point Alembic at our SQLModel metadata for autogenerate support
 target_metadata = SQLModel.metadata
 
-# Tables managed by external systems (LangGraph checkpointer, mem0, pgvector)
-# that Alembic should never touch.
+# Tables managed outside SQLModel metadata (raw Alembic SQL or external systems)
+# that autogenerate should never diff.
 EXCLUDE_TABLES = {
     "checkpoint_blobs",
     "checkpoint_writes",
@@ -44,6 +44,14 @@ EXCLUDE_TABLES = {
     "longterm_memory",
     "mem0migrations",
     "knowledge_chunks",
+    "knowledge_spaces",
+    "knowledge_documents",
+    "knowledge_space_principals",
+    "knowledge_document_principals",
+    "knowledge_connectors",
+    "knowledge_sync_runs",
+    "knowledge_entities",
+    "knowledge_relations",
 }
 
 
