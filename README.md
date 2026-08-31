@@ -36,15 +36,15 @@ PostgreSQL + pgvector :5433
 
 建议安装以下工具：
 
-| 工具 | 用途 | 建议版本 |
-| --- | --- | --- |
-| Git | 获取与管理代码 | 当前稳定版 |
-| Docker Desktop | 启动 PostgreSQL、后端和监控服务 | 当前稳定版，使用 Linux containers |
-| Python | 本机执行导入、检查和测试 | 3.13 |
-| [uv](https://docs.astral.sh/uv/) | Python 依赖管理 | 当前稳定版 |
-| Node.js | 运行前端 | 22 LTS |
-| pnpm | 前端依赖管理 | 11.19.0 |
-| GNU Make | 执行 Makefile 快捷命令 | 可选；Windows 可直接使用下文的 PowerShell 命令 |
+| 工具                             | 用途                            | 建议版本                                       |
+| -------------------------------- | ------------------------------- | ---------------------------------------------- |
+| Git                              | 获取与管理代码                  | 当前稳定版                                     |
+| Docker Desktop                   | 启动 PostgreSQL、后端和监控服务 | 当前稳定版，使用 Linux containers              |
+| Python                           | 本机执行导入、检查和测试        | 3.13                                           |
+| [uv](https://docs.astral.sh/uv/) | Python 依赖管理                 | 当前稳定版                                     |
+| Node.js                          | 运行前端                        | 22 LTS                                         |
+| pnpm                             | 前端依赖管理                    | 11.19.0                                        |
+| GNU Make                         | 执行 Makefile 快捷命令          | 可选；Windows 可直接使用下文的 PowerShell 命令 |
 
 平台部署至少需要准备下面的服务凭据：
 
@@ -371,4 +371,4 @@ docs/                  架构与可观测性文档
 
 ## License
 
-MIT
+本项目使用 [LICENSE](LICENSE) 中声明的许可协议。
