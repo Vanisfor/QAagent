@@ -9,6 +9,7 @@ from fastapi import APIRouter
 from app.api.v1.auth import router as auth_router
 from app.api.v1.chatbot import router as chatbot_router
 from app.api.v1.settings import router as settings_router
+from app.api.v1.knowledge import router as knowledge_router
 from app.core.logging import logger
 
 api_router = APIRouter()
@@ -17,6 +18,7 @@ api_router = APIRouter()
 api_router.include_router(auth_router, prefix="/auth", tags=["Auth"])
 api_router.include_router(chatbot_router, prefix="/chatbot", tags=["Chatbot"])
 api_router.include_router(settings_router, prefix="/users/me/settings", tags=["User Settings"])
+api_router.include_router(knowledge_router, prefix="/knowledge", tags=["Knowledge"])
 
 
 @api_router.get("/health")
