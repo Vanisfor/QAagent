@@ -14,7 +14,12 @@ from app.repositories.knowledge_sync import KnowledgeConnectorRecord, KnowledgeS
 from app.schemas.knowledge import DocumentChunk
 from app.services.connectors.base import ConnectorDocument, KnowledgeConnector
 from app.services.connectors.local_files import LocalDirectoryConnector
+from app.services.connectors.github import GitHubConnector
+from app.services.connectors.notion import NotionConnector
+from app.services.connectors.sharepoint import SharePointConnector
+from app.services.connector_credentials import ConnectorCredentialService, connector_credential_service
 from app.services.database import database_service
+from app.services.external_acl import ExternalACLService, external_acl_service
 from app.services.knowledge import knowledge_service
 
 _SPLIT_SEPARATORS = ["\n\n", "\n", "。", "！", "？", "；", ". ", " ", ""]
@@ -49,6 +54,10 @@ class SyncRepository(Protocol):
         """Fail a run without advancing its cursor."""
         ...
 
+    async def list_due_connector_ids(self, limit: int = 10) -> list[int]:
+        """List connectors due for scheduled synchronization."""
+        ...
+
 
 class KnowledgeWriter(Protocol):
     """Knowledge operations required by connector synchronization."""
@@ -75,6 +84,10 @@ class KnowledgeWriter(Protocol):
         source_type: str = "local",
     ) -> int:
         """Delete one normalized source document."""
+        ...
+
+    async def reindex_space(self, space_slug: str) -> int:
+        """Refresh external lexical ACL documents for a space."""
         ...
 
 
@@ -113,26 +126,62 @@ def _chunk_connector_document(document: ConnectorDocument) -> list[DocumentChunk
 class KnowledgeSyncService:
     """Run connector batches and advance cursors only after successful indexing."""
 
-    def __init__(self, repository: SyncRepository, knowledge: KnowledgeWriter) -> None:
+    def __init__(
+        self,
+        repository: SyncRepository,
+        knowledge: KnowledgeWriter,
+        credentials: ConnectorCredentialService | None = None,
+        external_acl: ExternalACLService | None = None,
+    ) -> None:
         """Inject durable state and knowledge write boundaries."""
         self._repository = repository
         self._knowledge = knowledge
+        self._credentials = credentials or connector_credential_service
+        self._external_acl = external_acl or external_acl_service
 
-    def _build_connector(self, record: KnowledgeConnectorRecord) -> KnowledgeConnector:
+    async def _build_connector(self, record: KnowledgeConnectorRecord) -> KnowledgeConnector:
         """Instantiate a connector from its non-secret persisted configuration."""
         if record.kind == "local":
             root_path = record.config.get("root_path")
             if not isinstance(root_path, str) or not root_path:
                 raise ValueError("local connector is missing root_path")
             return LocalDirectoryConnector(Path(root_path))
+        token = await self._credentials.get(record.id)
+        if record.kind == "github":
+            return GitHubConnector(
+                token=token,
+                owner=self._required_config(record, "owner"),
+                repository=self._required_config(record, "repository"),
+                branch=str(record.config.get("branch") or "main"),
+                api_url=str(record.config.get("api_url") or "https://api.github.com"),
+            )
+        if record.kind == "notion":
+            return NotionConnector(
+                token=token,
+                workspace_external_id=self._required_config(record, "workspace_external_id"),
+                api_url=str(record.config.get("api_url") or "https://api.notion.com/v1"),
+            )
+        if record.kind == "sharepoint":
+            return SharePointConnector(
+                token=token,
+                drive_id=self._required_config(record, "drive_id"),
+                api_url=str(record.config.get("api_url") or "https://graph.microsoft.com/v1.0"),
+            )
         raise ValueError(f"unsupported knowledge connector kind: {record.kind}")
+
+    @staticmethod
+    def _required_config(record: KnowledgeConnectorRecord, key: str) -> str:
+        value = record.config.get(key)
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"{record.kind} connector is missing {key}")
+        return value.strip()
 
     async def sync(self, connector_id: int) -> KnowledgeSyncResult:
         """Synchronize one connector, including source deletions and cursor settlement."""
         record = await self._repository.get_connector(connector_id)
         if record.status == "disabled":
             raise RuntimeError("knowledge connector is disabled")
-        connector = self._build_connector(record)
+        connector = await self._build_connector(record)
         run_id = await self._repository.start_run(record)
         documents_seen = 0
         documents_upserted = 0
@@ -142,11 +191,18 @@ class KnowledgeSyncService:
 
         try:
             with trace_span("knowledge.sync", connector_kind=record.kind, connector_id=record.id) as span:
-                batch = await connector.fetch_changes(record.cursor)
+                try:
+                    batch = await connector.fetch_changes(record.cursor)
+                finally:
+                    close = getattr(connector, "close", None)
+                    if close is not None:
+                        await close()
                 documents_seen = len(batch.documents)
                 next_cursor = batch.next_cursor
                 if batch.has_more:
                     raise RuntimeError("paginated connector batches are not supported by this worker yet")
+
+                await self._external_acl.sync_group_memberships(record.id, batch.group_memberships)
 
                 for document in batch.documents:
                     chunks = _chunk_connector_document(document)
@@ -169,6 +225,14 @@ class KnowledgeSyncService:
                     )
                     documents_upserted += 1
                     chunks_upserted += inserted
+                    if record.kind != "local":
+                        await self._external_acl.apply_document_acl(
+                            record.id,
+                            space_slug=record.space_slug,
+                            source_type=record.kind,
+                            external_id=document.external_id,
+                            principals=document.acl_principals,
+                        )
 
                 for external_id in batch.deleted_external_ids:
                     deleted = await self._knowledge.delete_source(
@@ -177,6 +241,9 @@ class KnowledgeSyncService:
                         source_type=record.kind,
                     )
                     documents_deleted += int(deleted > 0)
+
+                if record.kind != "local" and (documents_upserted or documents_deleted):
+                    await self._knowledge.reindex_space(record.space_slug)
 
                 span.set_attribute("documents_seen", documents_seen)
                 span.set_attribute("documents_upserted", documents_upserted)
@@ -218,4 +285,9 @@ class KnowledgeSyncService:
 
 
 knowledge_sync_repository = KnowledgeSyncRepository(database_service.session_factory)
-knowledge_sync_service = KnowledgeSyncService(knowledge_sync_repository, knowledge_service)
+knowledge_sync_service = KnowledgeSyncService(
+    knowledge_sync_repository,
+    knowledge_service,
+    connector_credential_service,
+    external_acl_service,
+)

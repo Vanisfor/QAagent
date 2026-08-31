@@ -31,14 +31,32 @@ class KnowledgeSyncRepository:
 
     async def create_local_connector(self, space_slug: str, name: str, root_path: str) -> int:
         """Register or update a local connector without storing credentials."""
+        return await self.create_connector(space_slug, "local", name, {"root_path": root_path})
+
+    async def create_connector(
+        self,
+        space_slug: str,
+        kind: str,
+        name: str,
+        config: dict[str, Any],
+        *,
+        sync_interval_seconds: int = 900,
+    ) -> int:
+        """Register or update a connector with non-secret provider configuration."""
+        if sync_interval_seconds < 60:
+            raise ValueError("sync_interval_seconds must be at least 60")
         statement: Any = text(
             """
-            INSERT INTO knowledge_connectors (space_id, kind, name, config)
-            SELECT space.id, 'local', :name, jsonb_build_object('root_path', CAST(:root_path AS text))
+            INSERT INTO knowledge_connectors (
+                space_id, kind, name, config, sync_interval_seconds, next_sync_at
+            )
+            SELECT space.id, :kind, :name, CAST(:config AS jsonb), :sync_interval_seconds, now()
             FROM knowledge_spaces AS space
             WHERE space.slug = :space_slug
             ON CONFLICT (space_id, name) DO UPDATE
             SET config = EXCLUDED.config,
+                kind = EXCLUDED.kind,
+                sync_interval_seconds = EXCLUDED.sync_interval_seconds,
                 updated_at = now()
             RETURNING id
             """
@@ -46,12 +64,32 @@ class KnowledgeSyncRepository:
         async with self._session_factory() as session, session.begin():
             result = await session.exec(
                 statement,
-                params={"space_slug": space_slug, "name": name, "root_path": root_path},
+                params={
+                    "space_slug": space_slug,
+                    "kind": kind,
+                    "name": name,
+                    "config": json.dumps(config),
+                    "sync_interval_seconds": sync_interval_seconds,
+                },
             )
             connector_id = result.scalar_one_or_none()
         if connector_id is None:
             raise ValueError(f"knowledge space not found: {space_slug}")
         return int(connector_id)
+
+    async def list_due_connector_ids(self, limit: int = 10) -> list[int]:
+        """List a bounded due set; start_run performs the atomic race-winning claim."""
+        statement: Any = text(
+            """
+            SELECT id FROM knowledge_connectors
+            WHERE status IN ('idle', 'failed') AND next_sync_at <= now()
+            ORDER BY next_sync_at, id
+            LIMIT :limit
+            """
+        )
+        async with self._session_factory() as session:
+            rows = (await session.exec(statement, params={"limit": min(max(1, limit), 100)})).mappings().all()
+        return [int(row["id"]) for row in rows]
 
     async def get_connector(self, connector_id: int) -> KnowledgeConnectorRecord:
         """Load one connector and its owning space."""
@@ -131,9 +169,10 @@ class KnowledgeSyncRepository:
         }
         update_connector: Any = text(
             """
-            UPDATE knowledge_connectors
-            SET sync_cursor = CAST(:cursor AS jsonb), status = 'idle',
-                last_synced_at = now(), updated_at = now()
+                    UPDATE knowledge_connectors
+                    SET sync_cursor = CAST(:cursor AS jsonb), status = 'idle',
+                        last_synced_at = now(), updated_at = now(),
+                        next_sync_at = now() + make_interval(secs => sync_interval_seconds)
             WHERE id = :connector_id
             """
         )
@@ -157,7 +196,12 @@ class KnowledgeSyncRepository:
         """Mark a failed run without advancing or exposing source content."""
         params = {"connector_id": connector_id, "run_id": run_id, "error_code": error_code[:120]}
         update_connector: Any = text(
-            "UPDATE knowledge_connectors SET status = 'failed', updated_at = now() WHERE id = :connector_id"
+            """
+            UPDATE knowledge_connectors
+            SET status = 'failed', updated_at = now(),
+                next_sync_at = now() + make_interval(secs => LEAST(sync_interval_seconds, 300))
+            WHERE id = :connector_id
+            """
         )
         update_run: Any = text(
             """
