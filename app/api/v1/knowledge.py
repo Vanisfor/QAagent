@@ -7,9 +7,9 @@ from app.core.config import settings
 from app.core.limiter import limiter
 from app.core.logging import logger
 from app.models.session import Session
-from app.schemas.knowledge import RetrievalContext
 from app.schemas.workflows import KnowledgeWorkflowRequest, ResearchResponse, WikiResponse
 from app.services.knowledge_workflows import KnowledgeEvidenceNotFound, knowledge_workflow_service
+from app.services.knowledge_access import KnowledgeAccessDenied, knowledge_access_service
 from app.services.user_llm_settings import (
     UserLLMSettingsNotConfigured,
     UserLLMSettingsUnavailable,
@@ -39,9 +39,14 @@ async def create_research_report(
     """Generate an evidence-backed research report for the authenticated user."""
     del request
     runtime = await _workflow_runtime(session.user_id)
-    context = RetrievalContext(user_id=str(session.user_id), space_slugs=tuple(payload.space_slugs))
     try:
+        context = await knowledge_access_service.context_for_user(
+            session.user_id,
+            requested_spaces=payload.space_slugs,
+        )
         return await knowledge_workflow_service.research(payload.query, context, runtime=runtime)
+    except KnowledgeAccessDenied as error:
+        raise HTTPException(status_code=403, detail=str(error)) from error
     except KnowledgeEvidenceNotFound as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
     except Exception as error:
@@ -59,9 +64,14 @@ async def create_wiki_page(
     """Generate an evidence-backed Wiki page for the authenticated user."""
     del request
     runtime = await _workflow_runtime(session.user_id)
-    context = RetrievalContext(user_id=str(session.user_id), space_slugs=tuple(payload.space_slugs))
     try:
+        context = await knowledge_access_service.context_for_user(
+            session.user_id,
+            requested_spaces=payload.space_slugs,
+        )
         return await knowledge_workflow_service.wiki(payload.query, context, runtime=runtime)
+    except KnowledgeAccessDenied as error:
+        raise HTTPException(status_code=403, detail=str(error)) from error
     except KnowledgeEvidenceNotFound as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
     except Exception as error:

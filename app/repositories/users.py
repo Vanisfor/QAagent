@@ -1,6 +1,9 @@
 """User persistence operations."""
 
+from typing import Any
+
 from sqlalchemy.ext.asyncio import async_sessionmaker
+from sqlalchemy import text
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -20,6 +23,15 @@ class UserRepository:
         async with self._session_factory() as session:
             user = User(email=email, hashed_password=password, username=username)
             session.add(user)
+            await session.flush()
+            membership_statement: Any = text(
+                """
+                INSERT INTO organization_members (organization_id, user_id, role)
+                SELECT id, :user_id, 'member' FROM organizations WHERE slug = 'default'
+                ON CONFLICT DO NOTHING
+                """
+            )
+            await session.exec(membership_statement, params={"user_id": user.id})
             await session.commit()
             await session.refresh(user)
             logger.info("user_created", email=email)

@@ -30,6 +30,7 @@ class SearchIndexRecord:
     is_public: bool
     allowed_principals: tuple[str, ...]
     metadata: dict[str, Any]
+    organization_id: int = 1
 
 
 @dataclass(frozen=True)
@@ -127,6 +128,7 @@ class OpenSearchBM25Service:
                     "source": {"type": "text", "similarity": "BM25"},
                     "source_type": {"type": "keyword"},
                     "space_slug": {"type": "keyword"},
+                    "organization_id": {"type": "long"},
                     "is_public": {"type": "boolean"},
                     "allowed_principals": {"type": "keyword"},
                     "metadata": {"type": "object", "enabled": False},
@@ -188,6 +190,8 @@ class OpenSearchBM25Service:
         """Retrieve strict BM25 candidates with ACL and space filters."""
         if not self.enabled or not query.strip():
             return []
+        if not context.organization_ids:
+            raise ValueError("organization context is required for BM25 retrieval")
         principals = [f"{kind}:{identifier}" for kind, identifier in context.principals]
         filters: list[dict[str, Any]] = [
             {
@@ -202,6 +206,8 @@ class OpenSearchBM25Service:
         ]
         if context.space_slugs:
             filters.append({"terms": {"space_slug": list(context.space_slugs)}})
+        if context.organization_ids:
+            filters.append({"terms": {"organization_id": list(context.organization_ids)}})
         body = {
             "size": top_k,
             "_source": False,

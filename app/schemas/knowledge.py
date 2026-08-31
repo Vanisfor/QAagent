@@ -67,6 +67,7 @@ class RetrievalContext(BaseModel):
     """Server-authenticated principals and optional knowledge-space scope."""
 
     user_id: str = Field(..., min_length=1)
+    organization_ids: tuple[int, ...] = ()
     group_ids: tuple[str, ...] = ()
     space_slugs: tuple[str, ...] = ()
 
@@ -84,5 +85,11 @@ class RetrievalContext(BaseModel):
             raise ValueError("authenticated user context is required for knowledge retrieval")
 
         group_ids = tuple(str(value) for value in metadata.get("knowledge_group_ids", ()) if str(value).strip())
+        organization_ids = tuple(int(value) for value in metadata.get("knowledge_organization_ids", ()))
         space_slugs = tuple(str(value) for value in metadata.get("knowledge_space_slugs", ()) if str(value).strip())
-        return cls(user_id=str(user_id), group_ids=group_ids, space_slugs=space_slugs)
+        return cls(
+            user_id=str(user_id),
+            organization_ids=organization_ids,
+            group_ids=group_ids,
+            space_slugs=space_slugs,
+        )

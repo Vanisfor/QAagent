@@ -52,6 +52,12 @@ EXCLUDE_TABLES = {
     "knowledge_sync_runs",
     "knowledge_entities",
     "knowledge_relations",
+    "organizations",
+    "organization_members",
+    "knowledge_groups",
+    "knowledge_group_members",
+    "connector_external_principals",
+    "knowledge_connector_credentials",
 }
 
 

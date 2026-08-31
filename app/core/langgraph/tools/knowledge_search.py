@@ -15,6 +15,7 @@ from app.services.knowledge import (
     KnowledgeBaseNotConfigured,
 )
 from app.services.retrieval_pipeline import retrieval_pipeline
+from app.services.knowledge_access import knowledge_access_service
 from app.services.user_llm_settings import user_llm_settings_service
 from app.schemas.knowledge import RetrievalContext
 
@@ -39,8 +40,13 @@ async def knowledge_search(query: str, config: RunnableConfig, top_k: int = 5) -
     """
     k = max(1, min(top_k, 10))
     try:
-        context = RetrievalContext.from_config(config)
-        runtime = await user_llm_settings_service.get_runtime(int(context.user_id))
+        requested_context = RetrievalContext.from_config(config)
+        user_id = int(requested_context.user_id)
+        context = await knowledge_access_service.context_for_user(
+            user_id,
+            requested_spaces=requested_context.space_slugs,
+        )
+        runtime = await user_llm_settings_service.get_runtime(user_id)
         bundle = await retrieval_pipeline.retrieve(query, context, runtime, intent="qa", top_k=k)
         hits = bundle.hits
     except KnowledgeBaseNotConfigured as e:

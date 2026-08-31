@@ -295,6 +295,7 @@ class KnowledgeService:
         *,
         is_public: bool = False,
         owner_user_id: Optional[str] = None,
+        organization_id: int = 1,
     ) -> int:
         """Create a knowledge space and optionally grant its owner access."""
         normalized_slug = slug.strip().lower()
@@ -307,14 +308,15 @@ class KnowledgeService:
                 async with conn.cursor() as cur:
                     await cur.execute(
                         """
-                        INSERT INTO knowledge_spaces (slug, name, is_public)
-                        VALUES (%s, %s, %s)
+                        INSERT INTO knowledge_spaces (slug, name, is_public, organization_id)
+                        VALUES (%s, %s, %s, %s)
                         ON CONFLICT (slug) DO UPDATE
                         SET name = EXCLUDED.name,
                             updated_at = now()
+                        WHERE knowledge_spaces.organization_id = EXCLUDED.organization_id
                         RETURNING id
                         """,
-                        (normalized_slug, name.strip(), is_public),
+                        (normalized_slug, name.strip(), is_public, organization_id),
                     )
                     row = await cur.fetchone()
                     if row is None:
@@ -420,7 +422,7 @@ class KnowledgeService:
             """
             SELECT chunk.id AS chunk_id, chunk.document_id, chunk.content,
                    document.title, document.source, document.source_type,
-                   space.slug AS space_slug, space.is_public,
+                   space.slug AS space_slug, space.is_public, space.organization_id,
                    document.metadata || chunk.metadata AS metadata,
                    ARRAY(
                        SELECT principal_type || ':' || principal_id
@@ -454,6 +456,7 @@ class KnowledgeService:
                 is_public=bool(row["is_public"]),
                 allowed_principals=tuple(str(value) for value in (row["allowed_principals"] or [])),
                 metadata=dict(row["metadata"] or {}),
+                organization_id=int(row["organization_id"]),
             )
             for row in rows
         ]
@@ -756,8 +759,11 @@ class KnowledgeService:
         else:
             threshold = min(max(settings.KNOWLEDGE_MIN_SIMILARITY, 0.0), 1.0)
 
-        access_context = context or RetrievalContext(user_id="anonymous")
+        access_context = context or RetrievalContext(user_id="anonymous", organization_ids=(1,))
+        if not access_context.organization_ids:
+            raise ValueError("organization context is required for knowledge retrieval")
         group_ids = list(access_context.group_ids)
+        organization_ids = list(access_context.organization_ids) or None
         scoped_spaces = list(access_context.space_slugs) or None
 
         with trace_span("rag.search", top_k=k, similarity_threshold=threshold, retrieval_mode="hybrid") as rag_span:
@@ -814,6 +820,7 @@ class KnowledgeService:
                       )
                   )
                   AND (%s::text[] IS NULL OR space.slug = ANY(%s))
+                  AND (%s::bigint[] IS NULL OR space.organization_id = ANY(%s))
                 ORDER BY chunk.embedding <=> %s::vector
                 LIMIT %s
                 """
@@ -853,6 +860,7 @@ class KnowledgeService:
                       )
                   )
                   AND (%s::text[] IS NULL OR space.slug = ANY(%s))
+                  AND (%s::bigint[] IS NULL OR space.organization_id = ANY(%s))
                 ORDER BY lexical_score DESC, chunk.id
                 LIMIT %s
                 """
@@ -887,6 +895,7 @@ class KnowledgeService:
                       )
                   )
                   AND (%s::text[] IS NULL OR space.slug = ANY(%s))
+                  AND (%s::bigint[] IS NULL OR space.organization_id = ANY(%s))
                 ORDER BY array_position(%s::bigint[], chunk.id)
                 """
             ).format(sql.Identifier(settings.KNOWLEDGE_TABLE))
@@ -914,6 +923,8 @@ class KnowledgeService:
                                 group_ids,
                                 scoped_spaces,
                                 scoped_spaces,
+                                organization_ids,
+                                organization_ids,
                                 query_vector,
                                 dense_limit,
                             ),
@@ -930,6 +941,8 @@ class KnowledgeService:
                                     group_ids,
                                     scoped_spaces,
                                     scoped_spaces,
+                                    organization_ids,
+                                    organization_ids,
                                     lexical_limit,
                                 ),
                             )
@@ -948,6 +961,8 @@ class KnowledgeService:
                                     group_ids,
                                     scoped_spaces,
                                     scoped_spaces,
+                                    organization_ids,
+                                    organization_ids,
                                     external_ids,
                                 ),
                             )
