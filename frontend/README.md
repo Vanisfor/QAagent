@@ -1,6 +1,6 @@
 # QA Agent Frontend
 
-React + TypeScript dashboard for the FastAPI/LangGraph backend.
+React + TypeScript developer workspace for the FastAPI/LangGraph backend.
 
 ```bash
 pnpm install
@@ -10,7 +10,9 @@ pnpm dev
 The Vite development server runs on `http://localhost:3002` and proxies `/api`
 to `http://localhost:8001`.
 
-Features include authentication, session creation, POST/SSE chat streaming,
-DeepSeek reasoning-effort controls, live reasoning and answer streams, token and
-cache telemetry, pipeline stages, responsive layout, reduced-motion support,
-and locally persisted animated background settings.
+The UI uses a dark-first, documentation-inspired shell with semantic CSS design
+tokens, desktop and mobile navigation, a real command menu, session history,
+POST/SSE chat streaming, runtime telemetry, BYOK model settings, and locally
+persisted appearance preferences. Motion for React is limited to layout and
+state transitions; streamed tokens are never animated individually, and user
+reduced-motion preferences are respected.
