@@ -15,6 +15,7 @@ from app.schemas.knowledge import (
 )
 from app.services.knowledge import (
     _content_hash,
+    _reciprocal_rank_fusion,
     _validate_embeddings,
     _vector_literal,
 )
@@ -40,6 +41,23 @@ def test_content_hash_deterministic() -> None:
     assert _content_hash("hello") == _content_hash("hello")
     assert _content_hash("hello") != _content_hash("world")
     assert len(_content_hash("hello")) == 32
+
+
+def test_reciprocal_rank_fusion_rewards_candidates_in_both_rankings() -> None:
+    """A candidate present in dense and lexical rankings should win fusion."""
+    scores = _reciprocal_rank_fusion([[1, 2], [2, 3]], rrf_k=60)
+
+    assert list(scores) == [2, 1, 3]
+    assert scores[2] > scores[1]
+    assert scores[1] > scores[3]
+
+
+def test_reciprocal_rank_fusion_deduplicates_repeated_candidates() -> None:
+    """Repeated candidate IDs in one ranking must contribute only once."""
+    scores = _reciprocal_rank_fusion([[1, 1, 2]], rrf_k=60)
+
+    assert scores[1] == 1 / 61
+    assert scores[2] == 1 / 62
 
 
 def test_validate_embeddings_rejects_wrong_count() -> None:
