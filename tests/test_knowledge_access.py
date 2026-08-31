@@ -5,6 +5,7 @@ from typing import Any
 
 from app.core.langgraph.tools.knowledge_search import (
     knowledge_search,
+    knowledge_access_service,
     retrieval_pipeline,
     user_llm_settings_service,
 )
@@ -37,6 +38,14 @@ def test_knowledge_search_passes_injected_access_context(monkeypatch) -> None:
         captured["runtime_user_id"] = user_id
         return object()
 
+    async def fake_access(user_id: int, *, requested_spaces=()) -> RetrievalContext:
+        return RetrievalContext(
+            user_id=str(user_id),
+            organization_ids=(1,),
+            group_ids=("legal",),
+            space_slugs=tuple(requested_spaces),
+        )
+
     async def fake_retrieve(query, context, runtime, *, intent, top_k):
         captured.update(query=query, context=context, top_k=top_k, intent=intent)
         return RetrievalBundle(
@@ -45,6 +54,7 @@ def test_knowledge_search_passes_injected_access_context(monkeypatch) -> None:
         )
 
     monkeypatch.setattr(user_llm_settings_service, "get_runtime", fake_runtime)
+    monkeypatch.setattr(knowledge_access_service, "context_for_user", fake_access)
     monkeypatch.setattr(retrieval_pipeline, "retrieve", fake_retrieve)
 
     result = asyncio.run(

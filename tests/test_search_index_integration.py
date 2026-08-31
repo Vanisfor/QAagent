@@ -55,8 +55,12 @@ def test_live_opensearch_bm25_filters_private_chunks() -> None:
             async with httpx.AsyncClient() as client:
                 await client.post(f"{url}/{index_name}/_refresh")
 
-            allowed = await service.search("deployment policy", RetrievalContext(user_id="allowed"), top_k=10)
-            denied = await service.search("deployment policy", RetrievalContext(user_id="denied"), top_k=10)
+            allowed = await service.search(
+                "deployment policy", RetrievalContext(user_id="allowed", organization_ids=(1,)), top_k=10
+            )
+            denied = await service.search(
+                "deployment policy", RetrievalContext(user_id="denied", organization_ids=(1,)), top_k=10
+            )
 
             assert [hit.chunk_id for hit in allowed] == [1, 2]
             assert [hit.chunk_id for hit in denied] == [2]
@@ -105,13 +109,13 @@ def test_live_hybrid_service_uses_bm25_with_postgres_acl(monkeypatch: pytest.Mon
             )
             allowed = await service.search(
                 "deployment policy",
-                context=RetrievalContext(user_id="allowed", space_slugs=(space_slug,)),
+                context=RetrievalContext(user_id="allowed", organization_ids=(1,), space_slugs=(space_slug,)),
                 top_k=5,
                 min_similarity=0.0,
             )
             denied = await service.search(
                 "deployment policy",
-                context=RetrievalContext(user_id="denied", space_slugs=(space_slug,)),
+                context=RetrievalContext(user_id="denied", organization_ids=(1,), space_slugs=(space_slug,)),
                 top_k=5,
                 min_similarity=0.0,
             )

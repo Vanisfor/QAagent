@@ -33,7 +33,12 @@ def test_opensearch_search_applies_acl_and_space_filters() -> None:
         hits = asyncio.run(
             service.search(
                 "deployment policy",
-                RetrievalContext(user_id="42", group_ids=("engineering",), space_slugs=("product",)),
+                RetrievalContext(
+                    user_id="42",
+                    organization_ids=(1,),
+                    group_ids=("engineering",),
+                    space_slugs=("product",),
+                ),
                 top_k=10,
             )
         )
@@ -46,6 +51,7 @@ def test_opensearch_search_applies_acl_and_space_filters() -> None:
     assert {"term": {"is_public": True}} in acl_filter["should"]
     assert {"terms": {"allowed_principals": ["user:42", "group:engineering"]}} in acl_filter["should"]
     assert {"terms": {"space_slug": ["product"]}} in filters
+    assert {"terms": {"organization_id": [1]}} in filters
     assert [(hit.chunk_id, hit.score) for hit in hits] == [(11, 4.2), (7, 3.1)]
 
 

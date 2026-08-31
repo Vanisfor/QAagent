@@ -11,10 +11,12 @@ class FakeStructuredLLM:
     """Return a prebuilt structured plan or raise a configured error."""
 
     def __init__(self, response=None, error: Exception | None = None) -> None:
+        """Store one response or error."""
         self.response = response
         self.error = error
 
     async def call(self, messages, *, response_format, **kwargs):
+        """Return the configured structured response."""
         if self.error is not None:
             raise self.error
         return self.response

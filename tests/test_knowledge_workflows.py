@@ -12,6 +12,7 @@ class FakePipeline:
     """Return a stable evidence bundle for workflow tests."""
 
     async def retrieve(self, query, context, runtime, *, intent, top_k):
+        """Return one evidence item and the requested explicit plan."""
         return RetrievalBundle(
             plan=QueryPlan(intent=intent, queries=[query], space_slugs=list(context.space_slugs)),
             hits=[
@@ -31,6 +32,7 @@ class FakeWorkflowLLM:
     """Return structured Research or Wiki drafts based on the requested schema."""
 
     async def call(self, messages, *, response_format, **kwargs):
+        """Return the structured draft matching the requested schema."""
         if response_format is ResearchDraft:
             return ResearchDraft(
                 title="Deployment research",
