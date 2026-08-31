@@ -187,10 +187,27 @@ class Settings:
         self.EMBEDDING_TIMEOUT = int(os.getenv("EMBEDDING_TIMEOUT", "30"))
         self.EMBEDDING_BATCH_SIZE = int(os.getenv("EMBEDDING_BATCH_SIZE", "64"))
         self.KNOWLEDGE_TABLE = os.getenv("KNOWLEDGE_TABLE", "knowledge_chunks")
+        self.KNOWLEDGE_DEFAULT_SPACE = os.getenv("KNOWLEDGE_DEFAULT_SPACE", "default-public")
         self.KNOWLEDGE_TOP_K = int(os.getenv("KNOWLEDGE_TOP_K", "5"))
+        self.KNOWLEDGE_DENSE_CANDIDATES = int(os.getenv("KNOWLEDGE_DENSE_CANDIDATES", "50"))
+        self.KNOWLEDGE_LEXICAL_CANDIDATES = int(os.getenv("KNOWLEDGE_LEXICAL_CANDIDATES", "50"))
+        self.KNOWLEDGE_RRF_K = int(os.getenv("KNOWLEDGE_RRF_K", "60"))
         self.KNOWLEDGE_MIN_SIMILARITY = float(os.getenv("KNOWLEDGE_MIN_SIMILARITY", "0.3"))
         self.KNOWLEDGE_CHUNK_SIZE = int(os.getenv("KNOWLEDGE_CHUNK_SIZE", "800"))
         self.KNOWLEDGE_CHUNK_OVERLAP = int(os.getenv("KNOWLEDGE_CHUNK_OVERLAP", "100"))
+        self.OPENSEARCH_URL = os.getenv("OPENSEARCH_URL", "")
+        self.OPENSEARCH_INDEX = os.getenv("OPENSEARCH_INDEX", "qaagent-knowledge-v1")
+        self.OPENSEARCH_USERNAME = os.getenv("OPENSEARCH_USERNAME", "")
+        self.OPENSEARCH_PASSWORD = os.getenv("OPENSEARCH_PASSWORD", "")
+        self.OPENSEARCH_VERIFY_SSL = os.getenv("OPENSEARCH_VERIFY_SSL", "true").lower() == "true"
+        self.OPENSEARCH_TIMEOUT = float(os.getenv("OPENSEARCH_TIMEOUT", "5"))
+        self.RERANK_ENABLED = os.getenv("RERANK_ENABLED", "false").lower() == "true"
+        self.RERANK_API_KEY = os.getenv("RERANK_API_KEY") or self.SILICONFLOW_API_KEY
+        self.RERANK_BASE_URL = os.getenv("RERANK_BASE_URL", self.SILICONFLOW_BASE_URL)
+        self.RERANK_MODEL = os.getenv("RERANK_MODEL", "BAAI/bge-reranker-v2-m3")
+        self.RERANK_TIMEOUT = float(os.getenv("RERANK_TIMEOUT", "8"))
+        self.RERANK_CANDIDATES = int(os.getenv("RERANK_CANDIDATES", "20"))
+        self.KNOWLEDGE_GRAPH_MAX_CHUNKS = int(os.getenv("KNOWLEDGE_GRAPH_MAX_CHUNKS", "20"))
 
         # Guard against invalid chunking configuration (would break the text splitter).
         if self.KNOWLEDGE_CHUNK_OVERLAP >= self.KNOWLEDGE_CHUNK_SIZE:
@@ -248,6 +265,8 @@ class Settings:
             "sessions": ["60 per minute"],
             "user_settings": ["30 per minute"],
             "user_settings_test": ["5 per minute"],
+            "research": ["5 per minute"],
+            "wiki": ["5 per minute"],
         }
 
         # Update rate limit endpoints from environment variables
