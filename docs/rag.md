@@ -2,28 +2,34 @@
 
 The agent answers questions with an ACL-aware **hybrid retrieval-augmented generation (RAG)** flow:
 
-1. The authenticated API injects the user principal into LangGraph runtime metadata.
-2. The LLM may call `knowledge_search`, but cannot provide or override that principal.
-3. PostgreSQL and OpenSearch apply public-space, user and group ACL predicates before ranking.
-4. Dense pgvector and strict OpenSearch BM25 candidates are fused with Reciprocal Rank Fusion (RRF).
+1. The server resolves organization membership and external group mappings for the authenticated user.
+2. A structured Query Planner produces bounded subqueries, entity names and narrowing space filters.
+3. PostgreSQL, OpenSearch and the provenance graph apply organization/user/group ACL predicates.
+4. Dense pgvector, strict OpenSearch BM25 and graph candidates are fused with RRF.
 5. A SiliconFlow Cross-Encoder reranks the fused shortlist when enabled.
-6. Retrieved passages are injected as untrusted evidence with stable source IDs.
-7. Missing internal evidence fails closed; public web search is reserved for explicitly public information.
+6. An evidence evaluator either accepts the evidence or emits at most three rewrites; retrieval stops after the configured loop limit.
+7. Retrieved passages are injected as untrusted evidence with stable source IDs.
+8. Missing internal evidence fails closed; public web search is reserved for explicitly public information.
 
 ## Architecture
 
 ```mermaid
 flowchart LR
     U[Authenticated question] --> C[chat node / LLM]
-    C -->|query and top_k only| K[KnowledgeService]
-    A[Server user and group context] --> K
-    K --> F[ACL and optional space pre-filter]
+    C -->|query only| P[Structured Query Planner]
+    A[Organization and external group context] --> P
+    P --> K[Hybrid and graph retrieval]
+    K --> F[Organization and ACL pre-filter]
     F --> D[Dense pgvector candidates]
     F --> L[OpenSearch BM25 candidates]
+    F --> G[Provenance graph traversal]
     D --> R[RRF fusion]
     L --> R
+    G --> R
     R --> X[Cross-Encoder reranker]
-    X --> E[Delimited evidence with citations]
+    X --> V[Evidence sufficiency evaluator]
+    V -->|insufficient and below limit| P
+    V -->|sufficient| E[Delimited evidence with citations]
     E --> C
     C -->|public information only| W[DuckDuckGo]
     C --> O[Final answer]
@@ -42,9 +48,20 @@ flowchart LR
 | Sync orchestrator | `app/services/knowledge_sync.py` | Cursor settlement, chunking, updates and delete propagation |
 | BM25 index | `app/services/search_index.py` | OpenSearch mapping, bulk indexing, ACL search and PostgreSQL hydration IDs |
 | Reranker | `app/services/reranker.py` | SiliconFlow Cross-Encoder with bounded fail-open behavior |
+| Query Planner | `app/services/query_planner.py` | Structured intent, subqueries, entities and safe space narrowing |
+| Evidence evaluator | `app/services/evidence_evaluator.py` | Sufficiency decision and bounded query rewrites |
+| Retrieval pipeline | `app/services/retrieval_pipeline.py` | Planner, Hybrid/KG execution, evaluator loop and final fusion |
+| Knowledge Graph | `app/services/knowledge_graph.py` | Entity/relation extraction, provenance and ACL traversal |
+| Product workflows | `app/services/knowledge_workflows.py` | Citation-validated Research and Wiki generation |
+| Organization access | `app/services/knowledge_access.py` | Server-owned tenant/group retrieval context |
+| External ACL sync | `app/services/external_acl.py` | Provider principal mappings and document ACL snapshots |
+| Connector vault | `app/services/connector_credentials.py` | AES-GCM provider-token storage with connector-bound AAD |
+| Scheduled sync | `app/services/knowledge_sync_worker.py` | Due-time background connector dispatch |
 | Base migration | `alembic/versions/7f3a9c1d2b4e_add_knowledge_chunks.py` | Original chunk table + HNSW index |
 | Enterprise migration | `alembic/versions/e41a8c7d2f90_add_enterprise_knowledge_acl.py` | Spaces, documents, ACLs and lexical GIN index |
 | Connector migration | `alembic/versions/f27c6e9a4b31_add_knowledge_connector_sync.py` | Connectors, cursors and content-free sync runs |
+| Graph migration | `alembic/versions/a13f8d4c7e52_add_provenance_knowledge_graph.py` | Space-scoped entities and chunk-backed relations |
+| Tenant migration | `alembic/versions/c35b7e1f9a64_add_organizations_and_external_acl.py` | Organizations, groups, mappings and encrypted connector secrets |
 
 ## Setup
 
@@ -95,7 +112,45 @@ flowchart LR
    durable cursor advances only after PostgreSQL and the configured external
    index both succeed.
 
-6. **Start the API**:
+   Provider connectors read tokens from environment variables and immediately
+   store them encrypted; tokens are never persisted in connector `config`:
+
+   ```bash
+   uv run python scripts/sync_knowledge.py register-github \
+     --owner acme --repository handbook --name github-handbook
+   uv run python scripts/sync_knowledge.py register-notion \
+     --workspace-external-id workspace-id --name notion-wiki
+   uv run python scripts/sync_knowledge.py register-sharepoint \
+     --drive-id drive-id --name sharepoint-drive
+   ```
+
+   Defaults: `GITHUB_CONNECTOR_TOKEN`, `NOTION_CONNECTOR_TOKEN` and
+   `SHAREPOINT_CONNECTOR_TOKEN`. Set
+   `CONNECTOR_CREDENTIAL_ENCRYPTION_KEY` to a separate platform key first.
+
+6. **Build the provenance graph** (this invokes an LLM and may consume quota):
+
+   ```bash
+   uv run python scripts/build_knowledge_graph.py --space default-public --user-id 1
+   ```
+
+7. **Configure organizations and tenant spaces**:
+
+   ```bash
+   uv run python scripts/manage_organizations.py create acme "Acme"
+   uv run python scripts/manage_organizations.py add-member acme 1 --role owner
+   uv run python scripts/manage_organizations.py create-space acme engineering "Engineering" --owner-user-id 1
+   ```
+
+   Provider identities that are not emails, such as GitHub logins, can be
+   explicitly mapped without weakening the organization boundary:
+
+   ```bash
+   uv run python scripts/sync_knowledge.py map-user 3 octocat 1
+   uv run python scripts/sync_knowledge.py add-group-member 4 engineering-group 1
+   ```
+
+8. **Start the API**:
 
    ```bash
    make dev
@@ -103,6 +158,14 @@ flowchart LR
 
    Then ask the agent something covered by your documents — it should retrieve
    passages and answer with sources.
+
+   Research and Wiki use the same Planner, ACL, Hybrid/KG and evaluator chain:
+
+   ```text
+   POST /api/v1/knowledge/research
+   POST /api/v1/knowledge/wiki
+   {"query": "deployment architecture", "space_slugs": ["engineering"]}
+   ```
 
 ## Configuration
 
@@ -131,6 +194,11 @@ flowchart LR
 | `RERANK_MODEL` | `BAAI/bge-reranker-v2-m3` | SiliconFlow reranking model |
 | `RERANK_CANDIDATES` | `20` | RRF candidates sent to the reranker |
 | `RERANK_TIMEOUT` | `8` | Reranker request timeout before fused-order fallback |
+| `RETRIEVAL_MAX_LOOPS` | `2` | Hard limit for evaluate → rewrite → retrieve rounds |
+| `KNOWLEDGE_GRAPH_MAX_CHUNKS` | `20` | Maximum chunks sent during one graph extraction |
+| `CONNECTOR_CREDENTIAL_ENCRYPTION_KEY` | *(empty)* | Separate platform master key for provider tokens |
+| `KNOWLEDGE_SYNC_WORKER_ENABLED` | `false` | Enable scheduled connector polling |
+| `KNOWLEDGE_SYNC_POLL_SECONDS` | `5` | Due-connector polling interval |
 
 ## Notes & gotchas
 
@@ -172,12 +240,16 @@ flowchart LR
 
 ## Current boundary and next phases
 
-The connector framework currently has a fully tested local-directory adapter.
-SharePoint, Confluence, Notion, Slack, GitHub and database adapters still need
-provider-specific OAuth/credential storage, external group identity mapping and
-paginated/delta implementations. Credentials must not be stored in connector
-`config`; use an encrypted platform credential store or external secrets manager.
+Implemented provider adapters are GitHub REST tree/content/collaborators, Notion
+page search/block traversal, and Microsoft Graph drive delta/content/permissions.
+SharePoint delta tombstones and Notion/GitHub pagination are consumed before the
+durable cursor advances. Notion's public API exposes content shared with a
+connection rather than a complete per-user page ACL; QAagent therefore models
+that as a connection-scoped external group which must be mapped to local members.
 
-Still intentionally pending: scheduled/background connector dispatch, explicit
-LangGraph query planning and evidence-sufficiency loops, knowledge-graph
-retrieval, and dedicated Search/Research/Wiki workflows.
+Still pending: OAuth authorization-code/token-refresh UI, Confluence/Slack/
+database adapters, automatic Microsoft/Notion directory membership expansion,
+and frontend screens for Research/Wiki/organization administration. Static PAT
+or access-token connectors, encrypted storage, external ACL snapshots, scheduled
+dispatch, Planner/evaluator loops, KG traversal and backend Research/Wiki APIs
+are implemented.
