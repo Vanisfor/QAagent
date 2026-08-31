@@ -34,6 +34,7 @@ from app.services.database import database_service
 from app.services.knowledge import knowledge_service
 from app.services.memory import memory_service
 from app.services.memory_jobs import memory_job_service
+from app.services.knowledge_sync_worker import knowledge_sync_worker
 
 # Load environment variables
 load_dotenv()
@@ -82,11 +83,17 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.exception("knowledge_service_pre_warm_failed", error=str(e))
 
+    try:
+        await knowledge_sync_worker.start()
+    except Exception as e:
+        logger.exception("knowledge_sync_worker_start_failed", error=str(e))
+
     # Dividing line
     yield
 
     # Cleanup on shutdown
     await cache_service.close()
+    await knowledge_sync_worker.stop()
     await knowledge_service.close()
     await memory_job_service.stop()
     await database_service.engine.dispose()
