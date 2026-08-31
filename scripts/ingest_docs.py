@@ -114,7 +114,7 @@ async def run(args: argparse.Namespace) -> int:
         if confirm.strip().lower() not in ("y", "yes"):
             console.print("[yellow]Aborted.[/yellow]")
             return 0
-        deleted = await knowledge_service.reset()
+        deleted = await knowledge_service.reset(space_slug=args.space)
         console.print(f"[cyan]Knowledge base reset: removed {deleted} chunks.[/cyan]")
 
     total_chunks = 0
@@ -134,9 +134,9 @@ async def run(args: argparse.Namespace) -> int:
                         source = file_path.relative_to(target).as_posix() if target.is_dir() else file_path.name
                     chunks = chunk_file(file_path, args.chunk_size, args.chunk_overlap, source)
                     if not chunks:
-                        await knowledge_service.delete_source(source)
+                        await knowledge_service.delete_source(source, space_slug=args.space)
                         continue
-                    inserted = await knowledge_service.replace_source(chunks)
+                    inserted = await knowledge_service.replace_source(chunks, space_slug=args.space)
                     total_chunks += inserted
                     total_files += 1
                     table.add_row(str(file_path), str(inserted), "ok")
@@ -158,7 +158,8 @@ async def run(args: argparse.Namespace) -> int:
     console.print(
         Panel.fit(
             f"[bold green]Done![/bold green] {total_files} documents, {total_chunks} chunks "
-            f"stored in table '{settings.KNOWLEDGE_TABLE}' (model: {settings.EMBEDDING_MODEL})."
+            f"stored in space '{args.space}' / table '{settings.KNOWLEDGE_TABLE}' "
+            f"(model: {settings.EMBEDDING_MODEL})."
         )
     )
     return 1 if failed else 0
@@ -173,6 +174,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--chunk-overlap", type=int, default=settings.KNOWLEDGE_CHUNK_OVERLAP, help="Chunk overlap")
     parser.add_argument("--source", type=str, default=None, help="Override the source label for all chunks")
+    parser.add_argument(
+        "--space",
+        type=str,
+        default=settings.KNOWLEDGE_DEFAULT_SPACE,
+        help="Existing knowledge-space slug (default: default-public)",
+    )
     parser.add_argument("--reset", action="store_true", help="Delete all existing chunks before ingesting")
     return parser.parse_args()
 
