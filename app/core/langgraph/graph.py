@@ -1,6 +1,7 @@
 """This file contains the LangGraph Agent/workflow and interactions with the LLM."""
 
 import asyncio
+import re
 from typing import (
     Any,
     AsyncGenerator,
@@ -51,6 +52,23 @@ from app.utils.graph import (
     prepare_messages,
     process_llm_response,
 )
+
+
+def _tool_result_summary(name: str, content: str) -> str:
+    """Return a short, human-readable summary of a tool result for the stream UI."""
+    if name == "knowledge_search":
+        if "<evidence" not in content:
+            return "未找到相关文档"
+        sources = sorted({match for match in re.findall(r'source="([^"]+)"', content)})
+        count = content.count("<doc")
+        source_text = "、".join(sources[:4]) + (" 等" if len(sources) > 4 else "")
+        return f"命中 {count} 条" + (f"（来源：{source_text}）" if source_text else "")
+    if name == "duckduckgo_search":
+        return "网页搜索完成"
+    if name == "ask_human":
+        return "等待用户确认"
+    snippet = re.sub(r"\s+", " ", content).strip()
+    return (snippet[:120] + ("…" if len(snippet) > 120 else "")) if snippet else "完成"
 
 
 class LangGraphAgent:
@@ -336,7 +354,8 @@ class LangGraphAgent:
                 graph.aget_state(config),
                 memory_service.search(user_id, messages[-1].content),
             )
-            yield {"type": "stage", "data": {"stage": "memory", "status": "completed"}}
+            memory_count = len([line for line in relevant_memory.splitlines() if line.startswith("* ")]) if relevant_memory else 0
+            yield {"type": "stage", "data": {"stage": "memory", "status": "completed", "count": memory_count}}
 
             if state.next:
                 logger.info("resuming_interrupted_graph_stream", session_id=session_id, next_nodes=state.next)
@@ -345,19 +364,45 @@ class LangGraphAgent:
                 relevant_memory = relevant_memory or "No relevant memory found."
                 graph_input = {"messages": dump_messages(messages), "long_term_memory": relevant_memory}
 
-            async for token, _ in graph.astream(
+            emitted_tool_calls: set[str] = set()
+
+            async for mode, payload in graph.astream(
                 graph_input,
                 config,
-                stream_mode="messages",
+                stream_mode=["messages", "custom"],
             ):
+                if mode == "custom":
+                    if isinstance(payload, dict) and str(payload.get("type", "")).startswith("rag_"):
+                        yield payload
+                    continue
+                token, _ = payload
                 if isinstance(token, ToolMessage):
+                    tool_name = token.name or "tool"
                     yield {
                         "type": "stage",
-                        "data": {"stage": token.name or "tool", "status": "completed"},
+                        "data": {"stage": tool_name, "status": "completed"},
+                    }
+                    yield {
+                        "type": "tool_result",
+                        "data": {"name": tool_name, "summary": _tool_result_summary(tool_name, str(token.content))},
                     }
                     continue
                 if not isinstance(token, (AIMessage, AIMessageChunk)):
                     continue
+
+                for tool_call in getattr(token, "tool_calls", None) or []:
+                    call_id = str(tool_call.get("id") or "")
+                    call_key = call_id or f"{tool_call.get('name')}:{len(emitted_tool_calls)}"
+                    if (
+                        call_key not in emitted_tool_calls
+                        and tool_call.get("name")
+                        and isinstance(tool_call.get("args"), dict)
+                    ):
+                        emitted_tool_calls.add(call_key)
+                        yield {
+                            "type": "tool_call",
+                            "data": {"name": str(tool_call["name"]), "args": tool_call["args"]},
+                        }
 
                 reasoning = token.additional_kwargs.get("reasoning_content")
                 if settings.EXPOSE_REASONING_CONTENT and isinstance(reasoning, str) and reasoning:

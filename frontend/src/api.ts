@@ -116,6 +116,25 @@ export async function listSessions(userToken: string): Promise<SessionSummary[]>
   })).reverse();
 }
 
+export async function renameSession(sessionToken: string, sessionId: string, name: string): Promise<SessionSummary> {
+  const response = await fetch(`${API}/auth/session/${sessionId}/name`, {
+    method: "PATCH",
+    headers: { Authorization: `Bearer ${sessionToken}` },
+    body: new URLSearchParams({ name }),
+  });
+  if (!response.ok) throw await parseError(response);
+  const data = await response.json();
+  return { sessionId: data.session_id, name: data.name ?? "", token: data.token.access_token };
+}
+
+export async function deleteSession(sessionToken: string, sessionId: string): Promise<void> {
+  const response = await fetch(`${API}/auth/session/${sessionId}`, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${sessionToken}` },
+  });
+  if (!response.ok) throw await parseError(response);
+}
+
 export async function getSessionMessages(sessionToken: string): Promise<HistoryMessage[]> {
   const response = await fetch(`${API}/chatbot/messages`, {
     headers: { Authorization: `Bearer ${sessionToken}` },

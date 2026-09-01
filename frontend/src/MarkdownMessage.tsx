@@ -1,5 +1,7 @@
 import { Children, isValidElement, type ReactNode, useState } from "react";
 import ReactMarkdown from "react-markdown";
+import rehypeHighlight from "rehype-highlight";
+import remarkGfm from "remark-gfm";
 import { Check, Copy } from "lucide-react";
 
 function nodeText(node: ReactNode): string {
@@ -32,5 +34,5 @@ function CodeFrame({ children }: { children?: ReactNode }) {
 }
 
 export function MarkdownMessage({ children }: { children: string }) {
-  return <ReactMarkdown components={{ pre: ({ children: codeChildren }) => <CodeFrame>{codeChildren}</CodeFrame> }}>{children}</ReactMarkdown>;
+  return <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]} components={{ pre: ({ children: codeChildren }) => <CodeFrame>{codeChildren}</CodeFrame>, table: ({ node: _node, ...props }) => <div className="markdown-table"><table {...props} /></div> }}>{children}</ReactMarkdown>;
 }

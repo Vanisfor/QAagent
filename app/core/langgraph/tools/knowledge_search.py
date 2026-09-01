@@ -47,7 +47,7 @@ async def knowledge_search(query: str, config: RunnableConfig, top_k: int = 5) -
             requested_spaces=requested_context.space_slugs,
         )
         runtime = await user_llm_settings_service.get_runtime(user_id)
-        bundle = await retrieval_pipeline.retrieve(query, context, runtime, intent="qa", top_k=k)
+        bundle = await retrieval_pipeline.retrieve(query, context, runtime, intent="qa", top_k=k, config=config)
         hits = bundle.hits
     except KnowledgeBaseNotConfigured as e:
         logger.warning("knowledge_search_not_configured", error=str(e))

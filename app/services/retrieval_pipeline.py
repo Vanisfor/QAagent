@@ -3,6 +3,8 @@
 import asyncio
 from typing import Any
 
+from langgraph.config import get_stream_writer
+
 from app.core.config import settings
 from app.core.logging import logger
 from app.core.tracing import trace_span
@@ -41,9 +43,16 @@ class ExplicitRetrievalPipeline:
         *,
         intent: RetrievalIntent,
         top_k: int,
+        config: Any | None = None,
     ) -> RetrievalBundle:
         """Plan queries, execute them concurrently and fuse unique provenance chunks."""
         plan = await self._planner.plan(query, context, runtime=runtime, requested_intent=intent)
+        writer = _stream_writer(config)
+        if writer is not None:
+            writer({
+                "type": "rag_plan",
+                "data": {"queries": plan.queries, "use_graph": plan.use_graph},
+            })
         effective_context = context.model_copy(update={"space_slugs": tuple(plan.space_slugs)})
         per_query_k = min(max(top_k, settings.KNOWLEDGE_TOP_K), 20)
         with trace_span("retrieval.execute_plan", query_count=len(plan.queries), use_graph=plan.use_graph) as span:
@@ -120,7 +129,26 @@ class ExplicitRetrievalPipeline:
         )
         if assessment is None:
             assessment = await self._evaluator.evaluate(query, plan, hits, runtime=runtime)
+        if writer is not None:
+            writer({
+                "type": "rag_evaluate",
+                "data": {
+                    "sufficient": assessment.sufficient,
+                    "reason_code": assessment.reason_code,
+                    "rewritten_queries": assessment.rewritten_queries,
+                },
+            })
         return RetrievalBundle(plan=plan, hits=hits, assessment=assessment, iterations=iterations or 1)
+
+
+def _stream_writer(config: Any | None) -> Any:
+    """Return the LangGraph custom-stream writer when running inside a graph."""
+    if config is None:
+        return None
+    try:
+        return get_stream_writer()
+    except Exception:
+        return None
 
 
 retrieval_pipeline = ExplicitRetrievalPipeline(

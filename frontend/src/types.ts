@@ -1,6 +1,8 @@
 export type ReasoningEffort = "off" | "high" | "max";
 export type StreamEventType =
   | "meta" | "stage" | "reasoning_delta" | "answer_delta"
+  | "tool_call" | "tool_result"
+  | "rag_plan" | "rag_evaluate"
   | "usage" | "cache" | "error" | "done";
 
 export interface StreamEvent {
@@ -32,6 +34,14 @@ export interface StageItem {
 }
 
 export interface CacheStats { hits: number; misses: number; hitRate: number; scope: string }
+
+export interface RunStep {
+  id: string;
+  kind: "memory" | "tool" | "llm" | "rag" | "done" | "error";
+  title: string;
+  detail?: string;
+  status: "running" | "done" | "error";
+}
 
 export interface SessionSummary {
   sessionId: string;

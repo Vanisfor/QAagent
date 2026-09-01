@@ -1,75 +1,82 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { MotionConfig } from "motion/react";
-import { Activity, History, MessageSquarePlus, Palette, Settings } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { BrainCircuit } from "lucide-react";
 
-import { BackgroundStudio, defaultBackground, type BackgroundSettings } from "./BackgroundStudio";
-import { ModelSettingsDrawer } from "./ModelSettingsDrawer";
-import { createSession, getLLMSettings, getSessionMessages, listSessions, streamChat } from "./api";
+import { createSession, deleteSession as deleteSessionApi, getLLMSettings, getSessionMessages, listSessions, renameSession as renameSessionApi, streamChat } from "./api";
+import { BackgroundSettingsModal, PRESET_GRADIENTS, defaultChatBackground, type ChatBackgroundSettings } from "./BackgroundSettingsModal";
 import { AuthScreen } from "./components/auth/AuthScreen";
 import { ChatWorkspace } from "./components/chat/ChatWorkspace";
 import { AppShell } from "./components/layout/AppShell";
-import { MobileNav } from "./components/layout/MobileNav";
 import { Sidebar } from "./components/layout/Sidebar";
-import { TopNav } from "./components/layout/TopNav";
-import { RuntimePanel } from "./components/runtime/RuntimePanel";
-import { CommandMenu, type CommandAction } from "./components/ui/CommandMenu";
-import { Drawer } from "./components/ui/Drawer";
-import type { CacheStats, ChatMessage, LLMSettings, ReasoningEffort, SessionSummary, StageItem, StreamEvent, TokenUsage } from "./types";
+import { TopBar } from "./components/layout/TopBar";
+import { RunPanel } from "./components/runtime/RunPanel";
+import { ModelSettingsModal } from "./ModelSettingsModal";
+import type { ChatMessage, LLMSettings, RunStep, SessionSummary, StreamEvent } from "./types";
 
 const uid = () => crypto.randomUUID();
-const emptyUsage: TokenUsage = { input: 0, output: 0, total: 0, reasoning: 0, exact: false };
 
-function AppBackdrop({ settings }: { settings: BackgroundSettings }) {
-  return <div className={`app-backdrop bg-${settings.preset}`} style={{ "--accent": settings.accent, "--intensity": settings.intensity / 100, "--speed": `${18 - settings.speed / 10}s` } as React.CSSProperties} aria-hidden="true">{settings.preset === "custom" && settings.imageDataUrl && <div className="custom-background-image" style={{ backgroundImage: `url(${settings.imageDataUrl})`, opacity: settings.intensity / 100 }} />}<div className="ambient-orb" /></div>;
+function emailFromToken(token: string): string {
+  try {
+    let part = (token.split(".")[1] ?? "").replace(/-/g, "+").replace(/_/g, "/");
+    while (part.length % 4) part += "=";
+    const payload = JSON.parse(atob(part));
+    return payload.sub ?? payload.email ?? payload.username ?? "账户";
+  } catch { return "账户"; }
 }
 
-function LoadingWorkspace({ background }: { background: BackgroundSettings }) {
-  return <><AppBackdrop settings={background} /><main className="loading-page"><span className="loading-mark" /><p>Loading workspace</p></main></>;
+function loadBackground(): ChatBackgroundSettings {
+  try {
+    const parsed = JSON.parse(localStorage.getItem("qa-agent-chat-bg-v1") ?? "null");
+    return parsed ? { ...defaultChatBackground, ...parsed } : defaultChatBackground;
+  } catch { return defaultChatBackground; }
 }
 
-function App() {
+function ChatBackdrop({ settings }: { settings: ChatBackgroundSettings }) {
+  const background = settings.imageDataUrl ? `url(${settings.imageDataUrl})` : (PRESET_GRADIENTS[settings.preset] ?? undefined);
+  if (!background) return null;
+  return <div className="chat-backdrop" aria-hidden="true"><div className="chat-backdrop-image" style={{ background, filter: `brightness(${settings.brightness}) blur(${settings.blur}px)`, opacity: settings.opacity }} /><div className="chat-backdrop-scrim" /></div>;
+}
+
+function LoadingWorkspace() {
+  return <main className="chat-empty"><span className="brand-mark"><BrainCircuit size={20} /></span><p>正在载入工作区…</p></main>;
+}
+
+export default function App() {
   const [userToken, setUserToken] = useState(() => sessionStorage.getItem("qa-user-token") ?? "");
   const [sessionToken, setSessionToken] = useState(() => sessionStorage.getItem("qa-session-token") ?? "");
   const [sessionId, setSessionId] = useState(() => sessionStorage.getItem("qa-session-id") ?? "");
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
-  const [sessionLoading, setSessionLoading] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
-  const [effort, setEffort] = useState<ReasoningEffort>("off");
   const [streaming, setStreaming] = useState(false);
-  const [stages, setStages] = useState<StageItem[]>([]);
-  const [usage, setUsage] = useState<TokenUsage>(emptyUsage);
-  const [cache, setCache] = useState<CacheStats>({ hits: 0, misses: 0, hitRate: 0, scope: "instance" });
   const [llmSettings, setLLMSettings] = useState<LLMSettings | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [appearanceOpen, setAppearanceOpen] = useState(false);
-  const [mobileNavOpen, setMobileNavOpen] = useState(false);
-  const [commandOpen, setCommandOpen] = useState(false);
-  const [runtimeOpen, setRuntimeOpen] = useState(false);
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [reasoningOpen, setReasoningOpen] = useState(true);
-  const [theme, setTheme] = useState<"dark" | "light">(() => localStorage.getItem("qa-agent-theme") === "light" ? "light" : "dark");
-  const [background, setBackground] = useState<BackgroundSettings>(() => {
-    try { return JSON.parse(localStorage.getItem("qa-agent-background-v1") ?? "null") ?? defaultBackground; }
-    catch { return defaultBackground; }
-  });
+  const [backgroundOpen, setBackgroundOpen] = useState(false);
+  const [chatBackground, setChatBackground] = useState<ChatBackgroundSettings>(loadBackground);
   const [backgroundPersistenceError, setBackgroundPersistenceError] = useState("");
+  const [runSteps, setRunSteps] = useState<RunStep[]>([]);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [sidebarMobileOpen, setSidebarMobileOpen] = useState(false);
+  const [isMobile, setIsMobile] = useState(() => window.matchMedia("(max-width: 860px)").matches);
+  const [theme, setTheme] = useState<"light" | "dark">(() => localStorage.getItem("qa-agent-theme") === "dark" ? "dark" : "light");
   const controller = useRef<AbortController | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
   const sessionLoadSequence = useRef(0);
+  const stepSeq = useRef(0);
+  const llmStepRef = useRef<string | null>(null);
+  const memoryStepRef = useRef<string | null>(null);
 
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages]);
   useEffect(() => { document.documentElement.dataset.theme = theme; localStorage.setItem("qa-agent-theme", theme); }, [theme]);
   useEffect(() => {
-    try { localStorage.setItem("qa-agent-background-v1", JSON.stringify(background)); setBackgroundPersistenceError(""); }
+    try { localStorage.setItem("qa-agent-chat-bg-v1", JSON.stringify(chatBackground)); setBackgroundPersistenceError(""); }
     catch { setBackgroundPersistenceError("浏览器存储空间不足，当前背景可能无法在刷新后保留。"); }
-  }, [background]);
+  }, [chatBackground]);
   useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") { event.preventDefault(); setCommandOpen((current) => !current); }
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
+    const mq = window.matchMedia("(max-width: 860px)");
+    const update = () => setIsMobile(mq.matches);
+    update();
+    mq.addEventListener("change", update);
+    return () => mq.removeEventListener("change", update);
   }, []);
   useEffect(() => {
     if (!userToken) { setLLMSettings(null); return; }
@@ -101,33 +108,91 @@ function App() {
     return () => { cancelled = true; };
   }, [userToken]);
 
-  const latestAssistant = [...messages].reverse().find((message) => message.role === "assistant");
-  const estimatedOutput = useMemo(() => Math.ceil((latestAssistant?.content.length ?? 0) / 3.5), [latestAssistant]);
-  const activeSession = sessions.find((session) => session.sessionId === sessionId);
-  const busy = sessionLoading || streaming;
+  function addRunStep(partial: Omit<RunStep, "id">): string {
+    const id = `run-${stepSeq.current++}`;
+    setRunSteps((current) => [...current, { ...partial, id }]);
+    return id;
+  }
 
-  function handleEvent(event: StreamEvent, assistantId: string) {
-    if (event.type === "reasoning_delta" || event.type === "answer_delta") {
-      setMessages((current) => current.map((message) => message.id === assistantId ? { ...message, content: event.type === "answer_delta" ? message.content + event.content : message.content, reasoning: event.type === "reasoning_delta" ? (message.reasoning ?? "") + event.content : message.reasoning } : message));
-    } else if (event.type === "stage") {
-      const stage = String(event.data.stage ?? "agent"); const status = String(event.data.status ?? "started") as StageItem["status"];
-      setStages((current) => [...current.filter((item) => item.stage !== stage), { stage, status, elapsedMs: Number(event.data.elapsed_ms ?? 0) || undefined }]);
-    } else if (event.type === "usage") {
-      const data = event.data;
-      setUsage({ input: Number(data.input_tokens ?? data.input ?? 0), output: Number(data.output_tokens ?? data.output ?? 0), total: Number(data.total_tokens ?? data.total ?? 0), reasoning: Number((data.output_token_details as Record<string, unknown> | undefined)?.reasoning ?? data.reasoning ?? 0), exact: true });
-    } else if (event.type === "cache") {
-      setCache({ hits: Number(event.data.hits ?? 0), misses: Number(event.data.misses ?? 0), hitRate: Number(event.data.hit_rate ?? 0), scope: String(event.data.scope ?? "instance") });
+  function updateRunStep(id: string, patch: Partial<RunStep>) {
+    setRunSteps((current) => current.map((step) => step.id === id ? { ...step, ...patch } : step));
+  }
+
+  function toolLabel(name: string): string {
+    switch (name) {
+      case "knowledge_search": return "知识库检索";
+      case "duckduckgo_search": return "网页搜索";
+      case "ask_human": return "人工确认";
+      default: return name;
     }
   }
 
-  async function send() {
-    const question = input.trim();
-    if (!question || busy) return;
+  function toolArgsDetail(name: string, args: Record<string, unknown>): string {
+    if (name === "knowledge_search") return `查询：${String(args.query ?? "")}`;
+    if (name === "duckduckgo_search") return `搜索：${String(args.query ?? "")}`;
+    if (name === "ask_human") return `提问：${String(args.question ?? args.prompt ?? "")}`;
+    try {
+      const text = JSON.stringify(args);
+      return text.length > 100 ? `${text.slice(0, 100)}…` : text;
+    } catch { return ""; }
+  }
+
+  function handleEvent(event: StreamEvent, assistantId: string) {
+    if (event.type === "answer_delta") {
+      if (!llmStepRef.current) llmStepRef.current = addRunStep({ kind: "llm", title: "生成回答", status: "running" });
+      setMessages((current) => current.map((message) => message.id === assistantId ? { ...message, content: message.content + event.content } : message));
+    } else if (event.type === "stage") {
+      const stage = String(event.data.stage ?? "");
+      const status = String(event.data.status ?? "");
+      if (stage === "memory") {
+        if (status === "started") {
+          memoryStepRef.current = addRunStep({ kind: "memory", title: "记忆检索", detail: "正在检索你的长期记忆…", status: "running" });
+        } else if (status === "completed" && memoryStepRef.current) {
+          const count = Number(event.data.count ?? 0);
+          updateRunStep(memoryStepRef.current, { status: "done", detail: count > 0 ? `找到 ${count} 条相关记忆` : "没有找到相关记忆" });
+        }
+      }
+    } else if (event.type === "tool_call") {
+      const name = String(event.data.name ?? "tool");
+      addRunStep({ kind: "tool", title: toolLabel(name), detail: toolArgsDetail(name, (event.data.args ?? {}) as Record<string, unknown>), status: "running" });
+    } else if (event.type === "tool_result") {
+      const name = String(event.data.name ?? "");
+      const summary = String(event.data.summary ?? "完成");
+      setRunSteps((current) => {
+        let matched = false;
+        return current.map((step) => {
+          if (!matched && step.kind === "tool" && step.title === toolLabel(name) && step.status === "running") {
+            matched = true;
+            return { ...step, status: "done", detail: summary };
+          }
+          return step;
+        });
+      });
+    } else if (event.type === "rag_plan") {
+      const queries = Array.isArray(event.data.queries) ? event.data.queries.map(String) : [];
+      const listed = queries.join("、");
+      addRunStep({ kind: "rag", title: "查询规划", detail: queries.length > 0 ? `生成 ${queries.length} 条检索词：${listed.length > 80 ? `${listed.slice(0, 80)}…` : listed}` : "已生成检索计划", status: "done" });
+    } else if (event.type === "rag_evaluate") {
+      const sufficient = Boolean(event.data.sufficient);
+      const reason = String(event.data.reason_code ?? "not_evaluated");
+      addRunStep({ kind: "rag", title: "证据评估", detail: sufficient ? "证据充分，可以作答" : `证据不足（${reason}），继续补充检索`, status: "done" });
+    } else if (event.type === "done") {
+      if (llmStepRef.current) updateRunStep(llmStepRef.current, { status: "done", detail: "回答完成" });
+    } else if (event.type === "error") {
+      if (llmStepRef.current) updateRunStep(llmStepRef.current, { status: "error", detail: "回答生成失败" });
+      setRunSteps((current) => current.map((step) => step.status === "running" ? { ...step, status: "error", detail: step.detail ?? "已中断" } : step));
+    }
+  }
+
+  async function send(prompt?: string) {
+    const question = (prompt ?? input).trim();
+    if (!question || streaming) return;
     if (!llmSettings?.configured) { setSettingsOpen(true); return; }
-    const assistantId = uid(); setInput(""); setStages([]); setUsage(emptyUsage);
-    setMessages((current) => [...current, { id: uid(), role: "user", content: question }, { id: assistantId, role: "assistant", content: "", reasoning: "" }]);
+    const assistantId = uid(); setInput("");
+    setMessages((current) => [...current, { id: uid(), role: "user", content: question }, { id: assistantId, role: "assistant", content: "" }]);
+    setRunSteps([]); llmStepRef.current = null; memoryStepRef.current = null;
     setStreaming(true); controller.current = new AbortController();
-    try { await streamChat(sessionToken, question, effort, (event) => handleEvent(event, assistantId), controller.current.signal); }
+    try { await streamChat(sessionToken, question, "off", (event) => handleEvent(event, assistantId), controller.current.signal); }
     catch (reason) {
       if (!(reason instanceof DOMException && reason.name === "AbortError")) setMessages((current) => current.map((message) => message.id === assistantId ? { ...message, content: `请求失败：${reason instanceof Error ? reason.message : "未知错误"}` } : message));
     } finally { setStreaming(false); void listSessions(userToken).then(setSessions).catch(() => undefined); }
@@ -135,17 +200,18 @@ function App() {
 
   async function activateSession(session: SessionSummary, loadHistory: boolean) {
     const sequence = ++sessionLoadSequence.current;
-    controller.current?.abort(); setSessionLoading(true);
+    controller.current?.abort(); setStreaming(false);
     sessionStorage.setItem("qa-session-id", session.sessionId); sessionStorage.setItem("qa-session-token", session.token);
-    setSessionId(session.sessionId); setSessionToken(session.token); setStages([]); setUsage(emptyUsage); setMessages([]);
-    if (!loadHistory) { setSessionLoading(false); return; }
+    setSessionId(session.sessionId); setSessionToken(session.token); setMessages([]);
+    setRunSteps([]); llmStepRef.current = null; memoryStepRef.current = null;
+    if (!loadHistory) return;
     try {
       const history = await getSessionMessages(session.token);
       if (sequence !== sessionLoadSequence.current) return;
       setMessages(history.map((message) => ({ id: uid(), role: message.role, content: message.content })));
     } catch (reason) {
       if (sequence === sessionLoadSequence.current) setMessages([{ id: uid(), role: "assistant", content: `无法加载会话记录：${reason instanceof Error ? reason.message : "未知错误"}` }]);
-    } finally { if (sequence === sessionLoadSequence.current) setSessionLoading(false); }
+    }
   }
 
   async function newChat() {
@@ -156,44 +222,45 @@ function App() {
     } catch (reason) { setMessages([{ id: uid(), role: "assistant", content: `无法创建新会话：${reason instanceof Error ? reason.message : "未知错误"}` }]); }
   }
 
+  async function handleRenameSession(session: SessionSummary, name: string) {
+    const trimmed = name.trim();
+    if (!trimmed || trimmed === session.name) return;
+    try {
+      const updated = await renameSessionApi(session.token, session.sessionId, trimmed);
+      setSessions((current) => current.map((item) => item.sessionId === session.sessionId ? { ...item, name: updated.name, token: updated.token } : item));
+      if (session.sessionId === sessionId) setSessionToken(updated.token);
+    } catch (reason) { setMessages([{ id: uid(), role: "assistant", content: `重命名失败：${reason instanceof Error ? reason.message : "未知错误"}` }]); }
+  }
+
+  async function handleDeleteSession(session: SessionSummary) {
+    if (!window.confirm(`确定删除会话「${session.name || "新对话"}」吗？`)) return;
+    try {
+      await deleteSessionApi(session.token, session.sessionId);
+      const remaining = sessions.filter((item) => item.sessionId !== session.sessionId);
+      setSessions(remaining);
+      if (session.sessionId === sessionId) {
+        if (remaining.length > 0) await activateSession(remaining[0], true);
+        else await newChat();
+      }
+    } catch (reason) { setMessages([{ id: uid(), role: "assistant", content: `删除失败：${reason instanceof Error ? reason.message : "未知错误"}` }]); }
+  }
+
   function logout() {
     controller.current?.abort(); sessionLoadSequence.current += 1; sessionStorage.clear();
     setUserToken(""); setSessionToken(""); setSessionId(""); setSessions([]); setLLMSettings(null);
   }
 
-  const commandActions = useMemo<CommandAction[]>(() => [
-    { id: "new-session", label: "New session", group: "Workspace", hint: "N", icon: <MessageSquarePlus size={16} />, run: () => void newChat() },
-    { id: "runtime", label: "Open execution", group: "Runtime", icon: <Activity size={16} />, run: () => setRuntimeOpen(true) },
-    { id: "models", label: "Models & API", group: "Settings", icon: <Settings size={16} />, run: () => setSettingsOpen(true) },
-    { id: "appearance", label: "Appearance", group: "Settings", icon: <Palette size={16} />, run: () => setAppearanceOpen(true) },
-    ...sessions.map((session) => ({ id: `session-${session.sessionId}`, label: session.name || "新对话", group: "History", icon: <History size={16} />, run: () => void activateSession(session, true) })),
-  ], [sessions]);
+  function handleToggleSidebar() { if (isMobile) setSidebarMobileOpen((current) => !current); else setSidebarCollapsed((current) => !current); }
 
-  if (!userToken) return <MotionConfig reducedMotion="user"><AppBackdrop settings={background} /><AuthScreen onReady={(token, session) => { setUserToken(token); setSessionToken(session.token); setSessionId(session.sessionId); }} /></MotionConfig>;
-  if (!sessionToken) return <MotionConfig reducedMotion="user"><LoadingWorkspace background={background} /></MotionConfig>;
+  if (!userToken) return <AuthScreen onReady={(token, session) => { setUserToken(token); setSessionToken(session.token); setSessionId(session.sessionId); }} />;
+  if (!sessionToken) return <LoadingWorkspace />;
 
-  const sidebarProps = {
-    sessions, sessionId, busy,
-    onChat: () => document.getElementById("workspace")?.scrollIntoView({ behavior: "smooth" }),
-    onNewSession: () => void newChat(),
-    onSelectSession: (session: SessionSummary) => void activateSession(session, true),
-    onOpenRuntime: () => setRuntimeOpen(true),
-    onOpenSettings: () => setSettingsOpen(true),
-    onOpenAppearance: () => setAppearanceOpen(true),
-  };
-  const runtime = <RuntimePanel stages={stages} usage={usage} cache={cache} estimatedOutput={estimatedOutput} streaming={streaming} effort={effort} />;
+  const modelConfigured = Boolean(llmSettings?.configured);
+  const modelName = llmSettings?.model ?? "DeepSeek";
 
-  return <MotionConfig reducedMotion="user"><AppBackdrop settings={background} /><AppShell
-    topNav={<TopNav theme={theme} modelName={llmSettings?.model ?? "DeepSeek"} modelConfigured={Boolean(llmSettings?.configured)} onOpenMobile={() => setMobileNavOpen(true)} onOpenCommand={() => setCommandOpen(true)} onOpenRuntime={() => setRuntimeOpen(true)} onOpenSettings={() => setSettingsOpen(true)} onOpenAppearance={() => setAppearanceOpen(true)} onToggleTheme={() => setTheme((current) => current === "dark" ? "light" : "dark")} onLogout={logout} />}
-    sidebar={<Sidebar {...sidebarProps} collapsed={sidebarCollapsed} onToggle={() => setSidebarCollapsed((current) => !current)} />}
-    context={runtime}
-  ><ChatWorkspace title={activeSession?.name || "新对话"} messages={messages} input={input} effort={effort} streaming={streaming} sessionLoading={sessionLoading} modelConfigured={Boolean(llmSettings?.configured)} thinkingEnabled={Boolean(llmSettings?.thinking_enabled)} reasoningOpen={reasoningOpen} endRef={endRef} onInputChange={setInput} onEffortChange={setEffort} onSend={() => void send()} onStop={() => controller.current?.abort()} onOpenSettings={() => setSettingsOpen(true)} onToggleReasoning={() => setReasoningOpen((current) => !current)} /></AppShell>
-    <MobileNav open={mobileNavOpen} onClose={() => setMobileNavOpen(false)} {...sidebarProps} />
-    <CommandMenu open={commandOpen} actions={commandActions} onClose={() => setCommandOpen(false)} />
-    <Drawer open={runtimeOpen} eyebrow="LIVE RUNTIME" title="Execution" className="runtime-drawer" onClose={() => setRuntimeOpen(false)}>{runtime}</Drawer>
-    <ModelSettingsDrawer open={settingsOpen} userToken={userToken} onClose={() => setSettingsOpen(false)} onChange={(value) => { setLLMSettings(value); if (!value.thinking_enabled) setEffort("off"); }} />
-    <BackgroundStudio open={appearanceOpen} settings={background} persistenceError={backgroundPersistenceError} onChange={setBackground} onClose={() => setAppearanceOpen(false)} />
-  </MotionConfig>;
+  return <>
+    <AppShell context={<RunPanel steps={runSteps} streaming={streaming} />} sidebar={<Sidebar sessions={sessions} sessionId={sessionId} busy={streaming} collapsed={!isMobile && sidebarCollapsed} mobileOpen={isMobile && sidebarMobileOpen} userLabel={emailFromToken(userToken)} onNewSession={() => void newChat()} onSelectSession={(session) => void activateSession(session, true)} onRenameSession={(session, name) => void handleRenameSession(session, name)} onDeleteSession={(session) => void handleDeleteSession(session)} onToggle={handleToggleSidebar} onOpenSettings={() => setSettingsOpen(true)} onOpenBackground={() => setBackgroundOpen(true)} onLogout={logout} />} main={<><ChatBackdrop settings={chatBackground} /><TopBar theme={theme} modelName={modelName} modelConfigured={modelConfigured} onToggleSidebar={handleToggleSidebar} onOpenSettings={() => setSettingsOpen(true)} onToggleTheme={() => setTheme((current) => current === "dark" ? "light" : "dark")} onLogout={logout} /><ChatWorkspace messages={messages} input={input} streaming={streaming} modelConfigured={modelConfigured} endRef={endRef} onInputChange={setInput} onSend={() => void send()} onSendPrompt={(prompt) => void send(prompt)} onStop={() => controller.current?.abort()} onOpenSettings={() => setSettingsOpen(true)} /></>} />
+    <ModelSettingsModal open={settingsOpen} userToken={userToken} onClose={() => setSettingsOpen(false)} onChange={setLLMSettings} />
+    <BackgroundSettingsModal open={backgroundOpen} settings={chatBackground} persistenceError={backgroundPersistenceError} onClose={() => setBackgroundOpen(false)} onChange={setChatBackground} />
+  </>;
 }
-
-export default App;

@@ -2,10 +2,10 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import { CheckCircle2, KeyRound, ShieldCheck, Trash2 } from "lucide-react";
 
 import { deleteLLMSettings, getLLMSettings, saveLLMSettings, testLLMSettings } from "./api";
-import { Drawer } from "./components/ui/Drawer";
+import { Modal } from "./components/ui/Modal";
 import type { LLMSettings, LLMSettingsInput } from "./types";
 
-interface ModelSettingsDrawerProps {
+interface ModelSettingsModalProps {
   open: boolean;
   userToken: string;
   onClose: () => void;
@@ -32,7 +32,7 @@ function formFromSettings(settings: LLMSettings): LLMSettingsInput {
   };
 }
 
-export function ModelSettingsDrawer({ open, userToken, onClose, onChange }: ModelSettingsDrawerProps) {
+export function ModelSettingsModal({ open, userToken, onClose, onChange }: ModelSettingsModalProps) {
   const [form, setForm] = useState<LLMSettingsInput>(defaultForm);
   const [maskedKey, setMaskedKey] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -82,7 +82,7 @@ export function ModelSettingsDrawer({ open, userToken, onClose, onChange }: Mode
     finally { setBusy(false); }
   }
 
-  return <Drawer open={open} eyebrow="PRIVATE BYOK" title="Models & API" className="settings-drawer" initialFocusRef={apiKeyRef} onClose={onClose}>
+  return <Modal open={open} title="模型与 API 设置" onClose={onClose}>
     <div className="security-note"><ShieldCheck size={18} /><div><strong>密钥由服务器加密保存</strong><p>完整 API Key 不会返回浏览器，也不会写入聊天记录、日志或追踪。</p></div></div>
     <form className="settings-form" onSubmit={save}>
       <label htmlFor="provider">API 供应商<select id="provider" value={form.provider} disabled><option value="deepseek">DeepSeek</option></select></label>
@@ -95,5 +95,5 @@ export function ModelSettingsDrawer({ open, userToken, onClose, onChange }: Mode
       <div className="settings-actions"><button type="button" className="secondary-button" onClick={() => void testConnection()} disabled={busy}>测试连接</button><button className="primary-button" disabled={busy}>{busy ? "处理中…" : "验证并保存"}</button></div>
       {maskedKey && <button type="button" className="danger-button" onClick={() => void removeCredential()} disabled={busy}><Trash2 size={15} />删除模型凭据</button>}
     </form>
-  </Drawer>;
+  </Modal>;
 }

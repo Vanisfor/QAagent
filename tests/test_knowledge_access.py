@@ -46,7 +46,7 @@ def test_knowledge_search_passes_injected_access_context(monkeypatch) -> None:
             space_slugs=tuple(requested_spaces),
         )
 
-    async def fake_retrieve(query, context, runtime, *, intent, top_k):
+    async def fake_retrieve(query, context, runtime, *, intent, top_k, config=None):
         captured.update(query=query, context=context, top_k=top_k, intent=intent)
         return RetrievalBundle(
             plan=QueryPlan(intent="qa", queries=[query]),

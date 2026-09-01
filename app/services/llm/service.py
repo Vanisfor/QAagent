@@ -14,7 +14,7 @@ from typing import (
 )
 
 from langchain_core.language_models import LanguageModelInput
-from langchain_core.messages import BaseMessage
+from langchain_core.messages import BaseMessage, SystemMessage
 from openai import (
     APIError,
     APITimeoutError,
@@ -38,6 +38,28 @@ from app.services.llm.registry import LLMRegistry
 from app.services.user_llm_settings import UserLLMRuntimeConfig
 
 T = TypeVar("T", bound=BaseModel)
+
+
+class _JsonInstructionModel:
+    """Wrap a json_mode structured-output runnable so the prompt always mentions JSON.
+
+    DeepSeek's ``json_object`` response_format requires the word "json" to appear in
+    the prompt; langchain's json_mode does not inject it automatically. Prepending a
+    short system instruction satisfies that check without touching each call site.
+    """
+
+    _INSTRUCTION = SystemMessage(
+        content=(
+            "Output ONLY a single JSON object as your final answer, matching the requested schema. "
+            "Do not include explanations, markdown code fences, or any text outside the JSON object."
+        )
+    )
+
+    def __init__(self, runnable: Any):
+        self._runnable = runnable
+
+    async def ainvoke(self, messages: LanguageModelInput) -> Any:
+        return await self._runnable.ainvoke([self._INSTRUCTION, *messages])
 
 
 class LLMService:
@@ -281,7 +303,10 @@ class LLMService:
             options = {**self._runtime_model_kwargs, **model_kwargs}
             base = LLMRegistry.get(LLMRegistry.LLMS[idx]["name"], **options)
             if response_format:
-                return base.with_structured_output(response_format)
+                # DeepSeek rejects `json_schema`; `json_mode` uses the supported
+                # `{"type": "json_object"}` response_format instead, and the wrapper
+                # guarantees the prompt contains the word "json".
+                return _JsonInstructionModel(base.with_structured_output(response_format, method="json_mode"))
             return base.bind_tools(self._bound_tools) if self._bound_tools else base
 
         def _default_target(_: int) -> Any:
