@@ -11,10 +11,10 @@ from langchain_core.runnables import RunnableConfig
 
 from app.core.logging import logger
 from app.core.evidence import build_evidence_block
+from app.core.langgraph.rag_workflow import agentic_rag_workflow
 from app.services.knowledge import (
     KnowledgeBaseNotConfigured,
 )
-from app.services.retrieval_pipeline import retrieval_pipeline
 from app.services.knowledge_access import knowledge_access_service
 from app.services.user_llm_settings import user_llm_settings_service
 from app.schemas.knowledge import RetrievalContext
@@ -47,7 +47,7 @@ async def knowledge_search(query: str, config: RunnableConfig, top_k: int = 5) -
             requested_spaces=requested_context.space_slugs,
         )
         runtime = await user_llm_settings_service.get_runtime(user_id)
-        bundle = await retrieval_pipeline.retrieve(query, context, runtime, intent="qa", top_k=k, config=config)
+        bundle = await agentic_rag_workflow.run(query, context, runtime, intent="qa", top_k=k, config=config)
         hits = bundle.hits
     except KnowledgeBaseNotConfigured as e:
         logger.warning("knowledge_search_not_configured", error=str(e))

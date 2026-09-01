@@ -4,9 +4,9 @@ import asyncio
 from typing import Any
 
 from app.core.langgraph.tools.knowledge_search import (
+    agentic_rag_workflow,
     knowledge_search,
     knowledge_access_service,
-    retrieval_pipeline,
     user_llm_settings_service,
 )
 from app.schemas.knowledge import KnowledgeHit, RetrievalContext
@@ -46,8 +46,8 @@ def test_knowledge_search_passes_injected_access_context(monkeypatch) -> None:
             space_slugs=tuple(requested_spaces),
         )
 
-    async def fake_retrieve(query, context, runtime, *, intent, top_k, config=None):
-        captured.update(query=query, context=context, top_k=top_k, intent=intent)
+    async def fake_run(query, context, runtime, *, intent, top_k, config=None):
+        captured.update(query=query, context=context, top_k=top_k, intent=intent, config=config)
         return RetrievalBundle(
             plan=QueryPlan(intent="qa", queries=[query]),
             hits=[KnowledgeHit(chunk_id=1, document_id=2, content="allowed", source="policy.md", score=0.9)],
@@ -55,7 +55,7 @@ def test_knowledge_search_passes_injected_access_context(monkeypatch) -> None:
 
     monkeypatch.setattr(user_llm_settings_service, "get_runtime", fake_runtime)
     monkeypatch.setattr(knowledge_access_service, "context_for_user", fake_access)
-    monkeypatch.setattr(retrieval_pipeline, "retrieve", fake_retrieve)
+    monkeypatch.setattr(agentic_rag_workflow, "run", fake_run)
 
     result = asyncio.run(
         knowledge_search.ainvoke(
@@ -69,4 +69,5 @@ def test_knowledge_search_passes_injected_access_context(monkeypatch) -> None:
     assert captured["top_k"] == 3
     assert captured["runtime_user_id"] == 42
     assert captured["intent"] == "qa"
+    assert captured["config"]["metadata"]["user_id"] == "42"
     assert "config" not in knowledge_search.args

@@ -14,6 +14,7 @@ graph TB
 
     subgraph Agent["LangGraph Agent"]
         Graph["StateGraph\n(chat → tool_call → chat)"]
+        RAG["Agentic RAG subgraph\nplan → retrieve → grade\n↳ rewrite or return evidence"]
         Checkpointer["AsyncPostgresSaver\n(conversation state)"]
     end
 
@@ -39,8 +40,9 @@ graph TB
     API --> Graph
     Graph --> LLM --> Trace
     Graph --> Tools
+    Tools --> RAG --> KB
     Graph --> Memory --> Cache
-    Graph --> KB --> PG
+    KB --> PG
     Graph <--> Checkpointer
     Memory --> PG
     Checkpointer --> PG
@@ -87,7 +89,8 @@ sequenceDiagram
 
 ## Agent graph
 
-The agent is a two-node `StateGraph`:
+The conversation agent remains a two-node `StateGraph` so generic tools keep the
+same retry, timeout and interrupt behavior:
 
 ```mermaid
 graph LR
@@ -100,6 +103,22 @@ graph LR
 - **`chat` node** — builds the system prompt, calls the LLM, returns a `Command` routing to `tool_call` or `END`
 - **`tool_call` node** — executes all tool calls concurrently, feeds results back to `chat`
 - **Checkpointer** — `AsyncPostgresSaver` persists the full `GraphState` per `thread_id` (session), enabling resume on interrupts and multi-turn memory
+
+`knowledge_search` invokes a dedicated, non-checkpointed Agentic RAG subgraph.
+Request-only BYOK runtime and trusted ACL context use LangGraph `context_schema`
+instead of graph state:
+
+```mermaid
+graph LR
+    START --> plan_query
+    plan_query --> retrieve_evidence
+    retrieve_evidence --> grade_evidence
+    grade_evidence -->|insufficient and below limit| rewrite_query
+    rewrite_query -->|new query| retrieve_evidence
+    rewrite_query -->|no new query| return_evidence
+    grade_evidence -->|sufficient or limit reached| return_evidence
+    return_evidence --> END
+```
 
 ## Key design decisions
 
@@ -120,6 +139,7 @@ graph LR
 | Component | File | Responsibility |
 |---|---|---|
 | LangGraph Agent | `app/core/langgraph/graph.py` | Orchestrates the conversation loop |
+| Agentic RAG workflow | `app/core/langgraph/rag_workflow.py` | Orchestrates explicit planning, retrieval, grading and bounded rewriting |
 | LLM Service | `app/services/llm/` | Model registry, retries, circular fallback, structured output |
 | Knowledge Service | `app/services/knowledge.py` | RAG: embed queries, pgvector storage & similarity search |
 | Memory Service | `app/services/memory.py` | mem0 semantic memory + cache |

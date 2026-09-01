@@ -16,9 +16,9 @@ The agent answers questions with an ACL-aware **hybrid retrieval-augmented gener
 ```mermaid
 flowchart LR
     U[Authenticated question] --> C[chat node / LLM]
-    C -->|query only| P[Structured Query Planner]
+    C -->|knowledge_search| P[plan_query]
     A[Organization and external group context] --> P
-    P --> K[Hybrid and graph retrieval]
+    P --> K[retrieve_evidence]
     K --> F[Organization and ACL pre-filter]
     F --> D[Dense pgvector candidates]
     F --> L[OpenSearch BM25 candidates]
@@ -27,9 +27,10 @@ flowchart LR
     L --> R
     G --> R
     R --> X[Cross-Encoder reranker]
-    X --> V[Evidence sufficiency evaluator]
-    V -->|insufficient and below limit| P
-    V -->|sufficient| E[Delimited evidence with citations]
+    X --> V[grade_evidence]
+    V -->|insufficient and below limit| Q[rewrite_query]
+    Q --> K
+    V -->|sufficient or limit reached| E[return_evidence]
     E --> C
     C -->|public information only| W[DuckDuckGo]
     C --> O[Final answer]
@@ -39,6 +40,7 @@ flowchart LR
 
 | Component | File | Responsibility |
 |---|---|---|
+| Agentic RAG workflow | `app/core/langgraph/rag_workflow.py` | Explicit Plan → Retrieve → Grade → Rewrite/Return state graph |
 | Knowledge Service | `app/services/knowledge.py` | Spaces, ACLs, normalized ingestion and hybrid retrieval |
 | Agent tool | `app/core/langgraph/tools/knowledge_search.py` | Exposes retrieval while consuming server-injected identity |
 | Schemas | `app/schemas/knowledge.py` | Chunks, hits and trusted `RetrievalContext` |
@@ -50,7 +52,7 @@ flowchart LR
 | Reranker | `app/services/reranker.py` | SiliconFlow Cross-Encoder with bounded fail-open behavior |
 | Query Planner | `app/services/query_planner.py` | Structured intent, subqueries, entities and safe space narrowing |
 | Evidence evaluator | `app/services/evidence_evaluator.py` | Sufficiency decision and bounded query rewrites |
-| Retrieval pipeline | `app/services/retrieval_pipeline.py` | Planner, Hybrid/KG execution, evaluator loop and final fusion |
+| Retrieval pipeline | `app/services/retrieval_pipeline.py` | Reusable planning, Hybrid/KG search, grading and final fusion operations |
 | Knowledge Graph | `app/services/knowledge_graph.py` | Entity/relation extraction, provenance and ACL traversal |
 | Product workflows | `app/services/knowledge_workflows.py` | Citation-validated Research and Wiki generation |
 | Organization access | `app/services/knowledge_access.py` | Server-owned tenant/group retrieval context |

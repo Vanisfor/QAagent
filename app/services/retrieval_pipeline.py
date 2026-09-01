@@ -1,15 +1,13 @@
-"""Explicit Planner → Hybrid/Graph → fusion retrieval pipeline."""
+"""Reusable planning, retrieval, grading and fusion operations for RAG workflows."""
 
 import asyncio
 from typing import Any
-
-from langgraph.config import get_stream_writer
 
 from app.core.config import settings
 from app.core.logging import logger
 from app.core.tracing import trace_span
 from app.schemas.knowledge import KnowledgeHit, RetrievalContext
-from app.schemas.retrieval import RetrievalBundle, RetrievalIntent
+from app.schemas.retrieval import EvidenceAssessment, QueryPlan, RetrievalBundle, RetrievalIntent
 from app.services.evidence_evaluator import EvidenceEvaluatorService, evidence_evaluator_service
 from app.services.knowledge import KnowledgeService, _reciprocal_rank_fusion, knowledge_service
 from app.services.knowledge_graph import KnowledgeGraphService, knowledge_graph_service
@@ -43,29 +41,11 @@ class ExplicitRetrievalPipeline:
         *,
         intent: RetrievalIntent,
         top_k: int,
-        config: Any | None = None,
     ) -> RetrievalBundle:
-        """Plan queries, execute them concurrently and fuse unique provenance chunks."""
-        plan = await self._planner.plan(query, context, runtime=runtime, requested_intent=intent)
-        writer = _stream_writer(config)
-        if writer is not None:
-            writer({
-                "type": "rag_plan",
-                "data": {"queries": plan.queries, "use_graph": plan.use_graph},
-            })
-        effective_context = context.model_copy(update={"space_slugs": tuple(plan.space_slugs)})
-        per_query_k = min(max(top_k, settings.KNOWLEDGE_TOP_K), 20)
+        """Run the same bounded workflow for non-LangGraph callers."""
+        plan = await self.plan(query, context, runtime, intent=intent)
         with trace_span("retrieval.execute_plan", query_count=len(plan.queries), use_graph=plan.use_graph) as span:
             rankings: list[list[KnowledgeHit]] = []
-            if plan.use_graph:
-                rankings.append(
-                    await self._graph.search(
-                        plan.entity_names,
-                        effective_context,
-                        top_k=per_query_k,
-                        max_hops=plan.max_hops,
-                    )
-                )
             pending_queries = plan.queries
             executed_queries: set[str] = set()
             iterations = 0
@@ -73,50 +53,22 @@ class ExplicitRetrievalPipeline:
             while pending_queries and iterations < self._max_loops:
                 iterations += 1
                 executed_queries.update(pending_queries)
-                round_rankings = await asyncio.gather(
-                    *(
-                        self._knowledge.search(search_query, context=effective_context, top_k=per_query_k)
-                        for search_query in pending_queries
-                    )
+                round_rankings = await self.search(
+                    plan,
+                    pending_queries,
+                    context,
+                    top_k=top_k,
+                    include_graph=iterations == 1,
                 )
                 rankings.extend(round_rankings)
-                round_hits = [hit for ranking in rankings for hit in ranking]
-                assessment = await self._evaluator.evaluate(query, plan, round_hits, runtime=runtime)
+                assessment = await self.grade(query, plan, rankings, runtime)
                 if assessment.sufficient:
                     break
                 pending_queries = [
                     rewrite for rewrite in assessment.rewritten_queries if rewrite not in executed_queries
                 ][:3]
                 plan = plan.model_copy(update={"queries": list(dict.fromkeys([*plan.queries, *pending_queries]))})
-            candidates: dict[int, KnowledgeHit] = {}
-            id_rankings: list[list[int]] = []
-            for ranking in rankings:
-                ids: list[int] = []
-                for hit in ranking:
-                    ids.append(hit.chunk_id)
-                    existing = candidates.get(hit.chunk_id)
-                    if existing is None:
-                        candidates[hit.chunk_id] = hit
-                    else:
-                        candidates[hit.chunk_id] = existing.model_copy(
-                            update={
-                                "retrieval_scores": {**existing.retrieval_scores, **hit.retrieval_scores},
-                                "metadata": {**existing.metadata, **hit.metadata},
-                            }
-                        )
-                id_rankings.append(ids)
-
-            fused = _reciprocal_rank_fusion(id_rankings, rrf_k=settings.KNOWLEDGE_RRF_K)
-            max_score = max(fused.values(), default=1.0)
-            hits = [
-                candidates[chunk_id].model_copy(
-                    update={
-                        "score": score / max_score,
-                        "retrieval_scores": {**candidates[chunk_id].retrieval_scores, "plan_rrf": score},
-                    }
-                )
-                for chunk_id, score in list(fused.items())[: min(max(1, top_k), 20)]
-            ]
+            hits = self.fuse(rankings, top_k=top_k)
             span.set_attribute("hit_count", len(hits))
             span.set_attribute("ranking_count", len(rankings))
             span.set_attribute("iterations", iterations)
@@ -128,27 +80,95 @@ class ExplicitRetrievalPipeline:
             graph_used=plan.use_graph,
         )
         if assessment is None:
-            assessment = await self._evaluator.evaluate(query, plan, hits, runtime=runtime)
-        if writer is not None:
-            writer({
-                "type": "rag_evaluate",
-                "data": {
-                    "sufficient": assessment.sufficient,
-                    "reason_code": assessment.reason_code,
-                    "rewritten_queries": assessment.rewritten_queries,
-                },
-            })
+            assessment = await self.grade(query, plan, [hits], runtime)
         return RetrievalBundle(plan=plan, hits=hits, assessment=assessment, iterations=iterations or 1)
 
+    async def plan(
+        self,
+        query: str,
+        context: RetrievalContext,
+        runtime: UserLLMRuntimeConfig | Any,
+        *,
+        intent: RetrievalIntent,
+    ) -> QueryPlan:
+        """Create one security-normalized retrieval plan."""
+        return await self._planner.plan(query, context, runtime=runtime, requested_intent=intent)
 
-def _stream_writer(config: Any | None) -> Any:
-    """Return the LangGraph custom-stream writer when running inside a graph."""
-    if config is None:
-        return None
-    try:
-        return get_stream_writer()
-    except Exception:
-        return None
+    async def search(
+        self,
+        plan: QueryPlan,
+        queries: list[str],
+        context: RetrievalContext,
+        *,
+        top_k: int,
+        include_graph: bool,
+    ) -> list[list[KnowledgeHit]]:
+        """Execute one retrieval round without deciding whether to loop."""
+        effective_context = context.model_copy(update={"space_slugs": tuple(plan.space_slugs)})
+        per_query_k = min(max(top_k, settings.KNOWLEDGE_TOP_K), 20)
+        rankings: list[list[KnowledgeHit]] = []
+        if include_graph and plan.use_graph:
+            rankings.append(
+                await self._graph.search(
+                    plan.entity_names,
+                    effective_context,
+                    top_k=per_query_k,
+                    max_hops=plan.max_hops,
+                )
+            )
+        rankings.extend(
+            await asyncio.gather(
+                *(
+                    self._knowledge.search(search_query, context=effective_context, top_k=per_query_k)
+                    for search_query in queries
+                )
+            )
+        )
+        return rankings
+
+    async def grade(
+        self,
+        query: str,
+        plan: QueryPlan,
+        rankings: list[list[KnowledgeHit]],
+        runtime: UserLLMRuntimeConfig | Any,
+    ) -> EvidenceAssessment:
+        """Assess whether all evidence collected so far is sufficient."""
+        hits = [hit for ranking in rankings for hit in ranking]
+        return await self._evaluator.evaluate(query, plan, hits, runtime=runtime)
+
+    @staticmethod
+    def fuse(rankings: list[list[KnowledgeHit]], *, top_k: int) -> list[KnowledgeHit]:
+        """Fuse ranked results while preserving provenance and component scores."""
+        candidates: dict[int, KnowledgeHit] = {}
+        id_rankings: list[list[int]] = []
+        for ranking in rankings:
+            ids: list[int] = []
+            for hit in ranking:
+                ids.append(hit.chunk_id)
+                existing = candidates.get(hit.chunk_id)
+                if existing is None:
+                    candidates[hit.chunk_id] = hit
+                else:
+                    candidates[hit.chunk_id] = existing.model_copy(
+                        update={
+                            "retrieval_scores": {**existing.retrieval_scores, **hit.retrieval_scores},
+                            "metadata": {**existing.metadata, **hit.metadata},
+                        }
+                    )
+            id_rankings.append(ids)
+
+        fused = _reciprocal_rank_fusion(id_rankings, rrf_k=settings.KNOWLEDGE_RRF_K)
+        max_score = max(fused.values(), default=1.0)
+        return [
+            candidates[chunk_id].model_copy(
+                update={
+                    "score": score / max_score,
+                    "retrieval_scores": {**candidates[chunk_id].retrieval_scores, "plan_rrf": score},
+                }
+            )
+            for chunk_id, score in list(fused.items())[: min(max(1, top_k), 20)]
+        ]
 
 
 retrieval_pipeline = ExplicitRetrievalPipeline(

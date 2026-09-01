@@ -354,7 +354,9 @@ class LangGraphAgent:
                 graph.aget_state(config),
                 memory_service.search(user_id, messages[-1].content),
             )
-            memory_count = len([line for line in relevant_memory.splitlines() if line.startswith("* ")]) if relevant_memory else 0
+            memory_count = (
+                len([line for line in relevant_memory.splitlines() if line.startswith("* ")]) if relevant_memory else 0
+            )
             yield {"type": "stage", "data": {"stage": "memory", "status": "completed", "count": memory_count}}
 
             if state.next:
