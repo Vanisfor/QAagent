@@ -33,6 +33,7 @@ cp .env.example .env.development
 | `DEFAULT_LLM_MODEL` | `deepseek-v4-flash` | No | Starting model — see [LLM Service](llm-service.md) |
 | `DEFAULT_LLM_TEMPERATURE` | `0.2` | No | Temperature for chat completions |
 | `MAX_TOKENS` | `2000` | No | Max tokens per LLM response |
+| `AGENT_CONTEXT_MAX_TOKENS` | `12000` | No | Input-message budget; sized separately so retrieved evidence is not dropped with the response limit |
 | `MAX_LLM_CALL_RETRIES` | `3` | No | Retries per model before switching to fallback |
 | `LLM_TOTAL_TIMEOUT` | `60` | No | Max seconds for the entire fallback loop |
 | `SESSION_NAMING_ENABLED` | `true` | No | Auto-generate a session title from the user's first message using an LLM background task |

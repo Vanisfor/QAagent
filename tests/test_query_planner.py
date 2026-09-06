@@ -68,3 +68,21 @@ def test_planner_failure_uses_bounded_single_query_fallback() -> None:
     assert plan.space_slugs == ["product"]
     assert plan.use_graph is False
     assert plan.max_hops == 0
+
+
+def test_query_plan_normalizes_known_json_mode_aliases() -> None:
+    """Known DeepSeek aliases map to canonical fields before strict validation."""
+    plan = QueryPlan.model_validate(
+        {
+            "queries": ["agent basics"],
+            "entities": ["Agent"],
+            "space_filters": ["default-public"],
+            "use_graph": True,
+            "max_hops": 1,
+        }
+    )
+
+    assert plan.entity_names == ["Agent"]
+    assert plan.space_slugs == ["default-public"]
+    assert "entities" not in plan.model_dump()
+    assert "space_filters" not in plan.model_dump()

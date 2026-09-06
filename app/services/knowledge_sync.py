@@ -5,8 +5,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Protocol
 
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-
 from app.core.config import settings
 from app.core.logging import logger
 from app.core.tracing import trace_span
@@ -19,10 +17,9 @@ from app.services.connectors.notion import NotionConnector
 from app.services.connectors.sharepoint import SharePointConnector
 from app.services.connector_credentials import ConnectorCredentialService, connector_credential_service
 from app.services.database import database_service
+from app.services.document_chunking import chunk_document
 from app.services.external_acl import ExternalACLService, external_acl_service
 from app.services.knowledge import knowledge_service
-
-_SPLIT_SEPARATORS = ["\n\n", "\n", "。", "！", "？", "；", ". ", " ", ""]
 
 
 class SyncRepository(Protocol):
@@ -103,24 +100,17 @@ class KnowledgeSyncResult:
 
 
 def _chunk_connector_document(document: ConnectorDocument) -> list[DocumentChunk]:
-    """Split a normalized document while preserving connector metadata."""
-    if not document.content.strip():
-        return []
-    splitter = RecursiveCharacterTextSplitter(
+    """Split a normalized document by structure while preserving connector metadata."""
+    format_hint = str(document.metadata.get("extension") or Path(document.source).suffix).lower()
+    return chunk_document(
+        document.content,
+        source=document.source,
         chunk_size=settings.KNOWLEDGE_CHUNK_SIZE,
         chunk_overlap=settings.KNOWLEDGE_CHUNK_OVERLAP,
-        separators=_SPLIT_SEPARATORS,
-        keep_separator=True,
+        document_title=document.title,
+        format_hint=format_hint,
+        metadata=document.metadata,
     )
-    pieces = [piece for piece in splitter.split_text(document.content) if piece.strip()]
-    return [
-        DocumentChunk(
-            content=piece,
-            source=document.source,
-            metadata={**document.metadata, "chunk_index": index, "chunk_count": len(pieces)},
-        )
-        for index, piece in enumerate(pieces)
-    ]
 
 
 class KnowledgeSyncService:

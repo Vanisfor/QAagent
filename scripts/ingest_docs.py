@@ -5,7 +5,7 @@ Usage (from the project root):
     uv run python scripts/ingest_docs.py docs/                        # ingest a directory
     uv run python scripts/ingest_docs.py notes/guide.md               # ingest one file
     uv run python scripts/ingest_docs.py docs/ --reset                # wipe KB first
-    uv run python scripts/ingest_docs.py docs/ --chunk-size 500       # tune chunking
+    uv run python scripts/ingest_docs.py docs/ --chunk-size 500       # tune max estimated tokens
 
 Supported formats: .md, .txt, .rst. Requires:
   - PostgreSQL running with pgvector (make docker-up / make docker-migrate)
@@ -22,7 +22,6 @@ import selectors
 import sys
 from pathlib import Path
 
-from langchain_text_splitters import RecursiveCharacterTextSplitter
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
@@ -34,14 +33,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from app.core.config import settings  # noqa: E402
 from app.core.logging import logger  # noqa: E402
 from app.schemas.knowledge import DocumentChunk  # noqa: E402
+from app.services.document_chunking import chunk_document  # noqa: E402
 from app.services.knowledge import knowledge_service  # noqa: E402
 
 console = Console()
 
 SUPPORTED_EXTENSIONS = {".md", ".txt", ".rst"}
-
-# Chinese-aware separators so paragraphs and sentences split cleanly.
-SPLIT_SEPARATORS = ["\n\n", "\n", "。", "！", "？", "；", ". ", " ", ""]
 
 
 def _selector_event_loop() -> asyncio.AbstractEventLoop:
@@ -62,36 +59,17 @@ def collect_files(path: Path) -> list[Path]:
 
 
 def chunk_file(path: Path, chunk_size: int, chunk_overlap: int, source: str | None) -> list[DocumentChunk]:
-    """Read a file and split it into overlapping chunks."""
-    if chunk_overlap >= chunk_size:
-        raise ValueError(f"chunk_overlap ({chunk_overlap}) must be smaller than chunk_size ({chunk_size})")
-
+    """Read a file and split it by structure before enforcing token bounds."""
     text = path.read_text(encoding="utf-8", errors="ignore")
-    if not text.strip():
-        return []
-
-    splitter = RecursiveCharacterTextSplitter(
+    return chunk_document(
+        text,
+        source=source or path.name,
         chunk_size=chunk_size,
         chunk_overlap=chunk_overlap,
-        separators=SPLIT_SEPARATORS,
-        keep_separator=True,
+        document_title=path.stem,
+        format_hint=path.suffix.lower(),
+        metadata={"file_name": path.name},
     )
-    pieces = splitter.split_text(text)
-
-    resolved_source = source or path.name
-    non_empty_pieces = [piece for piece in pieces if piece.strip()]
-    return [
-        DocumentChunk(
-            content=piece,
-            source=resolved_source,
-            metadata={
-                "file_name": path.name,
-                "chunk_index": index,
-                "chunk_count": len(non_empty_pieces),
-            },
-        )
-        for index, piece in enumerate(non_empty_pieces)
-    ]
 
 
 async def run(args: argparse.Namespace) -> int:
@@ -170,9 +148,14 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Ingest documents into the RAG knowledge base.")
     parser.add_argument("path", help="Path to a document file or a directory of documents")
     parser.add_argument(
-        "--chunk-size", type=int, default=settings.KNOWLEDGE_CHUNK_SIZE, help="Chunk size (characters)"
+        "--chunk-size", type=int, default=settings.KNOWLEDGE_CHUNK_SIZE, help="Maximum estimated tokens per chunk"
     )
-    parser.add_argument("--chunk-overlap", type=int, default=settings.KNOWLEDGE_CHUNK_OVERLAP, help="Chunk overlap")
+    parser.add_argument(
+        "--chunk-overlap",
+        type=int,
+        default=settings.KNOWLEDGE_CHUNK_OVERLAP,
+        help="Estimated token overlap within oversized sections",
+    )
     parser.add_argument("--source", type=str, default=None, help="Override the source label for all chunks")
     parser.add_argument(
         "--space",

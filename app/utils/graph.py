@@ -128,7 +128,7 @@ def prepare_messages(messages: list[Message], system_prompt: str) -> list[Messag
             dump_messages(messages),
             strategy="last",
             token_counter=_count_tokens_tiktoken,
-            max_tokens=settings.MAX_TOKENS,
+            max_tokens=settings.AGENT_CONTEXT_MAX_TOKENS,
             start_on="human",
             include_system=False,
             allow_partial=False,

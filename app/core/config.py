@@ -162,8 +162,14 @@ class Settings:
         self.SESSION_NAMING_ENABLED = os.getenv("SESSION_NAMING_ENABLED", "true").lower() == "true"
         self.DEFAULT_LLM_TEMPERATURE = float(os.getenv("DEFAULT_LLM_TEMPERATURE", "0.2"))
         self.MAX_TOKENS = int(os.getenv("MAX_TOKENS", "2000"))
+        self.AGENT_CONTEXT_MAX_TOKENS = max(
+            self.MAX_TOKENS,
+            int(os.getenv("AGENT_CONTEXT_MAX_TOKENS", "12000")),
+        )
         self.MAX_LLM_CALL_RETRIES = int(os.getenv("MAX_LLM_CALL_RETRIES", "3"))
         self.LLM_TOTAL_TIMEOUT = int(os.getenv("LLM_TOTAL_TIMEOUT", "60"))
+        self.AGENT_TOOL_CALL_BUDGET = max(1, int(os.getenv("AGENT_TOOL_CALL_BUDGET", "1")))
+        self.AGENT_RECURSION_LIMIT = max(4, int(os.getenv("AGENT_RECURSION_LIMIT", "25")))
         self.USER_SETTINGS_ENCRYPTION_KEY = os.getenv("USER_SETTINGS_ENCRYPTION_KEY", "")
         self.CONNECTOR_CREDENTIAL_ENCRYPTION_KEY = os.getenv("CONNECTOR_CREDENTIAL_ENCRYPTION_KEY", "")
         self.ALLOWED_LLM_BASE_URLS = parse_list_from_env(
@@ -214,7 +220,7 @@ class Settings:
         self.KNOWLEDGE_GRAPH_MAX_CHUNKS = int(os.getenv("KNOWLEDGE_GRAPH_MAX_CHUNKS", "20"))
         self.RETRIEVAL_MAX_LOOPS = int(os.getenv("RETRIEVAL_MAX_LOOPS", "2"))
 
-        # Guard against invalid chunking configuration (would break the text splitter).
+        # Chunk sizes are local token estimates; overlap applies only within oversized sections.
         if self.KNOWLEDGE_CHUNK_OVERLAP >= self.KNOWLEDGE_CHUNK_SIZE:
             clamped = max(0, self.KNOWLEDGE_CHUNK_SIZE - 1)
             print(

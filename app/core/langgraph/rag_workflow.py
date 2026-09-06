@@ -258,7 +258,7 @@ def _stream_writer() -> Any | None:
     """Return the current custom-stream writer when invoked inside LangGraph."""
     try:
         return get_stream_writer()
-    except RuntimeError:
+    except (KeyError, RuntimeError):
         return None
 
 

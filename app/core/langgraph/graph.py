@@ -1,7 +1,9 @@
 """This file contains the LangGraph Agent/workflow and interactions with the LLM."""
 
 import asyncio
+import json
 import re
+from collections.abc import Mapping
 from typing import (
     Any,
     AsyncGenerator,
@@ -13,6 +15,7 @@ from langchain_core.messages import (
     AIMessage,
     AIMessageChunk,
     BaseMessage,
+    HumanMessage,
     ToolMessage,
     convert_to_openai_messages,
 )
@@ -52,6 +55,87 @@ from app.utils.graph import (
     prepare_messages,
     process_llm_response,
 )
+
+
+_TOOL_GUARD_KEY = "tool_guard"
+_FINAL_ANSWER_INSTRUCTION = (
+    "The tool boundary for this user turn has been reached. Do not call or describe another tool call. "
+    "Answer now using the tool results already present. If the available evidence is insufficient, say so clearly."
+)
+
+
+def _current_turn_messages(messages: list[Any]) -> list[BaseMessage]:
+    """Return messages since the latest user message in the checkpointed history."""
+    start = 0
+    for index, message in enumerate(messages):
+        if isinstance(message, HumanMessage):
+            start = index
+    return [message for message in messages[start:] if isinstance(message, BaseMessage)]
+
+
+def _tool_call_fingerprint(tool_call: Mapping[str, Any]) -> str:
+    """Build a deterministic per-turn identity without logging tool arguments."""
+    arguments = json.dumps(
+        tool_call.get("args") or {},
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+    return f"{tool_call.get('name', '')}:{arguments}"
+
+
+def _prior_tool_fingerprints(messages: list[BaseMessage]) -> set[str]:
+    """Collect tool requests already emitted during the current user turn."""
+    return {
+        _tool_call_fingerprint(tool_call)
+        for message in messages
+        if isinstance(message, AIMessage)
+        for tool_call in message.tool_calls
+    }
+
+
+def _executed_tool_count(messages: list[BaseMessage]) -> int:
+    """Count actual tool executions, excluding deterministic guard responses."""
+    return sum(
+        1
+        for message in messages
+        if isinstance(message, ToolMessage) and not message.additional_kwargs.get(_TOOL_GUARD_KEY)
+    )
+
+
+def _final_answer_reason(messages: list[Any]) -> str | None:
+    """Return why the next chat node must generate a final answer without tools."""
+    current_turn = _current_turn_messages(messages)
+    for message in current_turn:
+        if (
+            isinstance(message, ToolMessage)
+            and message.name == "knowledge_search"
+            and "<evidence" in str(message.content)
+            and "<doc " in str(message.content)
+        ):
+            return "knowledge_evidence_available"
+    if any(
+        isinstance(message, ToolMessage) and message.additional_kwargs.get(_TOOL_GUARD_KEY) for message in current_turn
+    ):
+        return "tool_guard_triggered"
+    if _executed_tool_count(current_turn) >= settings.AGENT_TOOL_CALL_BUDGET:
+        return "tool_budget_exhausted"
+    return None
+
+
+def _guarded_tool_message(tool_call: dict[str, Any], *, reason: str) -> ToolMessage:
+    """Return one deterministic response for a skipped duplicate or over-budget call."""
+    if reason == "duplicate":
+        content = "This exact tool request was already handled. Use the existing result and answer now."
+    else:
+        content = "The per-turn tool budget is exhausted. Use available results and answer now."
+    return ToolMessage(
+        content=content,
+        name=str(tool_call.get("name") or "tool"),
+        tool_call_id=str(tool_call.get("id") or "guarded-tool-call"),
+        additional_kwargs={_TOOL_GUARD_KEY: reason},
+    )
 
 
 def _tool_result_summary(name: str, content: str) -> str:
@@ -113,15 +197,27 @@ class LangGraphAgent:
         if user_id is None:
             raise RuntimeError("authenticated user context is required for LLM execution")
         runtime = await user_llm_settings_service.get_runtime(int(user_id))
-        request_llm_service = LLMService(runtime).bind_tools(tools)
+        current_turn = _current_turn_messages(state.messages)
+        final_answer_reason = _final_answer_reason(current_turn)
+        request_llm_service = LLMService(runtime)
+        if final_answer_reason is None:
+            request_llm_service.bind_tools(tools)
+        else:
+            logger.info(
+                "agent_forcing_final_answer",
+                reason=final_answer_reason,
+                tool_calls_used=_executed_tool_count(current_turn),
+            )
         model_name = runtime.model
         username = config.get("metadata", {}).get("username")
         reasoning_effort = config.get("metadata", {}).get("reasoning_effort", "off")
         thread_id = config.get("configurable", {}).get("thread_id")
-        SYSTEM_PROMPT = load_system_prompt(username=username, long_term_memory=state.long_term_memory)
+        system_prompt = load_system_prompt(username=username, long_term_memory=state.long_term_memory)
+        if final_answer_reason is not None:
+            system_prompt = f"{system_prompt}\n\n# Current turn tool boundary\n{_FINAL_ANSWER_INSTRUCTION}"
 
         # Prepare messages with system prompt
-        messages = prepare_messages(state.messages, SYSTEM_PROMPT)
+        messages = prepare_messages(state.messages, system_prompt)
 
         try:
             # Use LLM service with automatic retries and circular fallback
@@ -147,7 +243,7 @@ class LangGraphAgent:
             )
 
             # Determine next node based on whether there are tool calls
-            if isinstance(response_message, AIMessage) and response_message.tool_calls:
+            if final_answer_reason is None and isinstance(response_message, AIMessage) and response_message.tool_calls:
                 goto = "tool_call"
             else:
                 goto = END
@@ -174,10 +270,38 @@ class LangGraphAgent:
             Command: Command object with updated messages and routing back to chat.
         """
         tool_calls = state.messages[-1].tool_calls
+        current_turn = _current_turn_messages(state.messages[:-1])
+        seen = _prior_tool_fingerprints(current_turn)
+        remaining = max(0, settings.AGENT_TOOL_CALL_BUDGET - _executed_tool_count(current_turn))
+        outputs: list[ToolMessage | None] = [None] * len(tool_calls)
+        pending_calls: list[dict[str, Any]] = []
+        pending_positions: list[int] = []
 
-        outputs = await self.tool_executor.execute_many(tool_calls, self.tools_by_name, config)
+        for index, tool_call in enumerate(tool_calls):
+            fingerprint = _tool_call_fingerprint(tool_call)
+            tool_name = str(tool_call.get("name") or "tool")
+            if fingerprint in seen:
+                logger.warning("duplicate_tool_call_skipped", tool_name=tool_name)
+                outputs[index] = _guarded_tool_message(tool_call, reason="duplicate")
+                continue
+            seen.add(fingerprint)
+            if len(pending_calls) >= remaining:
+                logger.warning(
+                    "tool_call_budget_exhausted",
+                    tool_name=tool_name,
+                    budget=settings.AGENT_TOOL_CALL_BUDGET,
+                )
+                outputs[index] = _guarded_tool_message(tool_call, reason="budget_exhausted")
+                continue
+            pending_calls.append(tool_call)
+            pending_positions.append(index)
 
-        return Command(update={"messages": outputs}, goto="chat")
+        if pending_calls:
+            executed_outputs = await self.tool_executor.execute_many(pending_calls, self.tools_by_name, config)
+            for index, output in zip(pending_positions, executed_outputs, strict=True):
+                outputs[index] = output
+
+        return Command(update={"messages": [output for output in outputs if output is not None]}, goto="chat")
 
     async def create_graph(self) -> Optional[CompiledStateGraph]:
         """Create and configure the LangGraph workflow.
@@ -262,6 +386,7 @@ class LangGraphAgent:
         graph = await self._get_graph()
         config: RunnableConfig = {
             "configurable": {"thread_id": session_id},
+            "recursion_limit": settings.AGENT_RECURSION_LIMIT,
             "metadata": {
                 "user_id": user_id,
                 "username": username,
@@ -333,6 +458,7 @@ class LangGraphAgent:
         """
         config: RunnableConfig = {
             "configurable": {"thread_id": session_id},
+            "recursion_limit": settings.AGENT_RECURSION_LIMIT,
             "metadata": {
                 "user_id": user_id,
                 "username": username,

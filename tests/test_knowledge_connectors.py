@@ -4,8 +4,9 @@ import asyncio
 from dataclasses import replace
 
 from app.repositories.knowledge_sync import KnowledgeConnectorRecord
+from app.services.connectors.base import ConnectorDocument
 from app.services.connectors.local_files import LocalDirectoryConnector
-from app.services.knowledge_sync import KnowledgeSyncService
+from app.services.knowledge_sync import KnowledgeSyncService, _chunk_connector_document
 
 
 def test_local_connector_reports_changes_and_tombstones(tmp_path) -> None:
@@ -46,6 +47,23 @@ def test_local_connector_rejects_path_outside_root(tmp_path) -> None:
         assert "directory" in str(error)
     else:
         raise AssertionError("missing connector root should fail")
+
+
+def test_connector_chunking_preserves_markdown_sections() -> None:
+    """Connector ingestion uses the same structure-aware metadata as the local CLI."""
+    document = ConnectorDocument(
+        external_id="guide.md",
+        source="guide.md",
+        title="Guide",
+        content="# Guide\n\nOverview.\n\n## Install\n\nInstall details.",
+        content_hash="digest",
+        metadata={"extension": ".md", "repository": "acme/docs"},
+    )
+
+    chunks = _chunk_connector_document(document)
+
+    assert [chunk.metadata["section_path"] for chunk in chunks] == [["Guide"], ["Guide", "Install"]]
+    assert all(chunk.metadata["repository"] == "acme/docs" for chunk in chunks)
 
 
 def test_sync_service_advances_cursor_after_upserts_and_deletes(tmp_path) -> None:

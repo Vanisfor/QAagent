@@ -1,6 +1,7 @@
 """LLM service with retries, circular fallback, and optional structured output."""
 
 import asyncio
+import json
 import logging
 from typing import (
     Any,
@@ -41,25 +42,26 @@ T = TypeVar("T", bound=BaseModel)
 
 
 class _JsonInstructionModel:
-    """Wrap a json_mode structured-output runnable so the prompt always mentions JSON.
+    """Wrap a json_mode runnable with one canonical Pydantic JSON contract.
 
     DeepSeek's ``json_object`` response_format requires the word "json" to appear in
-    the prompt; langchain's json_mode does not inject it automatically. Prepending a
-    short system instruction satisfies that check without touching each call site.
+    the prompt, and json_mode does not communicate the schema to the model. Prepending
+    the exact Pydantic schema keeps every structured call on the same field contract.
     """
 
-    _INSTRUCTION = SystemMessage(
-        content=(
-            "Output ONLY a single JSON object as your final answer, matching the requested schema. "
-            "Do not include explanations, markdown code fences, or any text outside the JSON object."
-        )
-    )
-
-    def __init__(self, runnable: Any):
+    def __init__(self, runnable: Any, response_format: Type[BaseModel]):
         self._runnable = runnable
+        schema = json.dumps(response_format.model_json_schema(), ensure_ascii=False, separators=(",", ":"))
+        self._instruction = SystemMessage(
+            content=(
+                "Output ONLY one JSON object that validates against the exact JSON Schema below. "
+                "Use only canonical property names from this schema. Do not add aliases, explanations, "
+                f"markdown fences, or text outside the JSON object.\nJSON Schema:\n{schema}"
+            )
+        )
 
     async def ainvoke(self, messages: LanguageModelInput) -> Any:
-        return await self._runnable.ainvoke([self._INSTRUCTION, *messages])
+        return await self._runnable.ainvoke([self._instruction, *messages])
 
 
 class LLMService:
@@ -306,7 +308,10 @@ class LLMService:
                 # DeepSeek rejects `json_schema`; `json_mode` uses the supported
                 # `{"type": "json_object"}` response_format instead, and the wrapper
                 # guarantees the prompt contains the word "json".
-                return _JsonInstructionModel(base.with_structured_output(response_format, method="json_mode"))
+                return _JsonInstructionModel(
+                    base.with_structured_output(response_format, method="json_mode"),
+                    response_format,
+                )
             return base.bind_tools(self._bound_tools) if self._bound_tools else base
 
         def _default_target(_: int) -> Any:

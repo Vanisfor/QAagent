@@ -6,7 +6,7 @@ from typing import TypedDict
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, START, StateGraph
 
-from app.core.langgraph.rag_workflow import AgenticRAGWorkflow
+from app.core.langgraph.rag_workflow import AgenticRAGWorkflow, _stream_writer
 from app.schemas.knowledge import KnowledgeHit, RetrievalContext
 from app.schemas.retrieval import EvidenceAssessment, QueryPlan
 
@@ -62,6 +62,11 @@ class OuterState(TypedDict):
     """Minimal parent graph state for custom-stream propagation testing."""
 
     done: bool
+
+
+def test_stream_writer_is_optional_outside_a_parent_graph() -> None:
+    """Direct workflow calls degrade to no custom writer without a Pregel runtime."""
+    assert _stream_writer() is None
 
 
 def test_agentic_rag_graph_exposes_standard_nodes_and_loop() -> None:

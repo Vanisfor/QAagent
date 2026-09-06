@@ -1,12 +1,20 @@
 """Structured query-planning, graph-extraction and retrieval contracts."""
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.schemas.knowledge import KnowledgeHit
 
 RetrievalIntent = Literal["qa", "search", "research", "wiki"]
+
+
+def _move_alias(payload: dict[str, Any], canonical: str, aliases: tuple[str, ...]) -> None:
+    """Move one known model-output alias to its canonical contract field."""
+    for alias in aliases:
+        if canonical not in payload and alias in payload:
+            payload[canonical] = payload[alias]
+        payload.pop(alias, None)
 
 
 class QueryPlan(BaseModel):
@@ -20,6 +28,17 @@ class QueryPlan(BaseModel):
     space_slugs: list[str] = Field(default_factory=list, max_length=10)
     use_graph: bool = False
     max_hops: int = Field(default=0, ge=0, le=2)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_contract_aliases(cls, value: Any) -> Any:
+        """Accept bounded legacy aliases while emitting only canonical names."""
+        if not isinstance(value, dict):
+            return value
+        normalized = dict(value)
+        _move_alias(normalized, "entity_names", ("entities",))
+        _move_alias(normalized, "space_slugs", ("space_filters",))
+        return normalized
 
     @field_validator("queries", "entity_names", "space_slugs")
     @classmethod
@@ -87,6 +106,21 @@ class EvidenceAssessment(BaseModel):
     sufficient: bool
     reason_code: Literal["sufficient", "missing_evidence", "conflicting_evidence", "not_evaluated"]
     rewritten_queries: list[str] = Field(default_factory=list, max_length=3)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_contract_aliases(cls, value: Any) -> Any:
+        """Normalize the known answer/queries shape returned by JSON-mode models."""
+        if not isinstance(value, dict):
+            return value
+        normalized = dict(value)
+        _move_alias(normalized, "rewritten_queries", ("queries", "rewrite_queries"))
+        answer = normalized.pop("answer", None)
+        if "sufficient" not in normalized:
+            normalized["sufficient"] = bool(answer)
+        if "reason_code" not in normalized:
+            normalized["reason_code"] = "sufficient" if normalized["sufficient"] else "missing_evidence"
+        return normalized
 
     @field_validator("rewritten_queries")
     @classmethod

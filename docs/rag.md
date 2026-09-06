@@ -102,6 +102,13 @@ flowchart LR
    uv run python scripts/ingest_docs.py docs/ --space default-public
    ```
 
+   Chunking is structure-first. Markdown ATX/Setext headings and RST underline
+   headings define section boundaries and a hierarchical `section_path`. Small
+   sections remain intact. Only oversized sections are split again on paragraph,
+   line, sentence and word boundaries using the configured local token estimate.
+   Each stored chunk repeats its heading breadcrumb and records section/chunk
+   indices in metadata, so retrieved passages retain their document context.
+
 5. **Or register an incremental local connector**:
 
    ```bash
@@ -186,8 +193,8 @@ flowchart LR
 | `KNOWLEDGE_LEXICAL_CANDIDATES` | `50` | ACL-filtered lexical candidates before fusion |
 | `KNOWLEDGE_RRF_K` | `60` | RRF rank constant |
 | `KNOWLEDGE_MIN_SIMILARITY` | `0.3` | Cosine cutoff for retrieval |
-| `KNOWLEDGE_CHUNK_SIZE` | `800` | Chunk size used by the ingest script |
-| `KNOWLEDGE_CHUNK_OVERLAP` | `100` | Chunk overlap used by the ingest script |
+| `KNOWLEDGE_CHUNK_SIZE` | `800` | Maximum estimated tokens per chunk after structure-aware section splitting |
+| `KNOWLEDGE_CHUNK_OVERLAP` | `100` | Estimated token overlap applied only within oversized sections |
 | `OPENSEARCH_URL` | *(empty)* | Enables strict BM25; empty uses PostgreSQL FTS fallback |
 | `OPENSEARCH_INDEX` | `qaagent-knowledge-v1` | Versioned chunk index name |
 | `OPENSEARCH_VERIFY_SSL` | `true` | Verify OpenSearch TLS certificates |
@@ -197,6 +204,8 @@ flowchart LR
 | `RERANK_CANDIDATES` | `20` | RRF candidates sent to the reranker |
 | `RERANK_TIMEOUT` | `8` | Reranker request timeout before fused-order fallback |
 | `RETRIEVAL_MAX_LOOPS` | `2` | Hard limit for evaluate → rewrite → retrieve rounds |
+| `AGENT_TOOL_CALL_BUDGET` | `2` | Maximum actual tool executions per user turn; retries do not consume extra budget |
+| `AGENT_RECURSION_LIMIT` | `25` | Final LangGraph safety ceiling after explicit tool guards |
 | `KNOWLEDGE_GRAPH_MAX_CHUNKS` | `20` | Maximum chunks sent during one graph extraction |
 | `CONNECTOR_CREDENTIAL_ENCRYPTION_KEY` | *(empty)* | Separate platform master key for provider tokens |
 | `KNOWLEDGE_SYNC_WORKER_ENABLED` | `false` | Enable scheduled connector polling |

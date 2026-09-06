@@ -13,6 +13,7 @@ from app.schemas.knowledge import (
     DocumentChunk,
     KnowledgeHit,
 )
+from app.services.document_chunking import chunk_document, estimate_token_count
 from app.services.knowledge import (
     _content_hash,
     _reciprocal_rank_fusion,
@@ -102,7 +103,7 @@ def test_knowledge_hit_model() -> None:
 
 
 def test_chunk_file_splits_long_text(tmp_path) -> None:
-    """chunk_file splits long documents into multiple chunks with the source label."""
+    """chunk_file splits long documents by estimated tokens with the source label."""
     doc = tmp_path / "doc.md"
     doc.write_text("段落一。" + "很长" * 100 + "\n\n段落二。", encoding="utf-8")
 
@@ -113,6 +114,72 @@ def test_chunk_file_splits_long_text(tmp_path) -> None:
     assert all(c.content.strip() for c in chunks)
     assert [c.metadata["chunk_index"] for c in chunks] == list(range(len(chunks)))
     assert all(c.metadata["chunk_count"] == len(chunks) for c in chunks)
+    assert all(c.metadata["chunking_strategy"] == "structure_then_token" for c in chunks)
+
+
+def test_chunk_file_preserves_markdown_heading_hierarchy(tmp_path) -> None:
+    """Short Markdown sections stay whole and carry their complete heading path."""
+    doc = tmp_path / "guide.md"
+    doc.write_text(
+        "# Guide\n\nIntroduction.\n\n## Install\n\nInstall steps.\n\n### Windows\n\nRun setup.ps1.",
+        encoding="utf-8",
+    )
+
+    chunks = chunk_file(doc, chunk_size=100, chunk_overlap=10, source="guide.md")
+
+    assert [chunk.metadata["section_path"] for chunk in chunks] == [
+        ["Guide"],
+        ["Guide", "Install"],
+        ["Guide", "Install", "Windows"],
+    ]
+    assert chunks[2].content.startswith("Guide > Install > Windows\n\n")
+    assert all(chunk.metadata["section_chunk_count"] == 1 for chunk in chunks)
+
+
+def test_chunk_file_splits_only_oversized_section(tmp_path) -> None:
+    """Token fallback splits one large section without mixing the next section."""
+    doc = tmp_path / "manual.md"
+    long_section = "\n\n".join(f"段落{i}：" + "内容" * 20 for i in range(8))
+    doc.write_text(f"# Manual\n\n## Large\n\n{long_section}\n\n## Small\n\n保持完整。", encoding="utf-8")
+
+    chunks = chunk_file(doc, chunk_size=60, chunk_overlap=5, source="manual.md")
+    large_chunks = [chunk for chunk in chunks if chunk.metadata["section_title"] == "Large"]
+    small_chunks = [chunk for chunk in chunks if chunk.metadata["section_title"] == "Small"]
+
+    assert len(large_chunks) > 1
+    assert len(small_chunks) == 1
+    assert all("保持完整" not in chunk.content for chunk in large_chunks)
+    assert all(chunk.metadata["estimated_token_count"] <= 60 for chunk in chunks)
+    assert [chunk.metadata["section_chunk_index"] for chunk in large_chunks] == list(range(len(large_chunks)))
+
+
+def test_chunk_file_recognizes_rst_heading_hierarchy(tmp_path) -> None:
+    """RST adornment order defines a stable nested section path."""
+    doc = tmp_path / "runbook.rst"
+    doc.write_text(
+        "Runbook\n=======\n\nOverview.\n\nDeploy\n------\n\nDeployment details.",
+        encoding="utf-8",
+    )
+
+    chunks = chunk_file(doc, chunk_size=100, chunk_overlap=10, source="runbook.rst")
+
+    assert [chunk.metadata["section_path"] for chunk in chunks] == [["Runbook"], ["Runbook", "Deploy"]]
+
+
+def test_plain_text_uses_document_title_as_section() -> None:
+    """Unstructured text remains one logical document section when it is small."""
+    chunks = chunk_document(
+        "First paragraph.\n\nSecond paragraph.",
+        source="notes.txt",
+        document_title="Notes",
+        format_hint=".txt",
+        chunk_size=100,
+        chunk_overlap=10,
+    )
+
+    assert len(chunks) == 1
+    assert chunks[0].metadata["section_path"] == ["Notes"]
+    assert chunks[0].metadata["estimated_token_count"] == estimate_token_count(chunks[0].content)
 
 
 def test_chunk_file_empty_file(tmp_path) -> None:
