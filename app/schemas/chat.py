@@ -16,8 +16,8 @@ from pydantic import (
 from app.schemas.base import BaseResponse
 
 
-class Message(BaseModel):
-    """Message model for chat endpoint.
+class ChatInputMessage(BaseModel):
+    """Untrusted message accepted by the chat endpoint.
 
     Attributes:
         role: The role of the message sender (user or assistant).
@@ -54,6 +54,19 @@ class Message(BaseModel):
         return v
 
 
+class ChatOutputMessage(BaseModel):
+    """Message returned by the agent or loaded from checkpoint history.
+
+    Output is intentionally not subject to the user-input length or script-tag
+    policy. Markdown answers may legitimately contain long code examples.
+    """
+
+    model_config = {"extra": "ignore"}
+
+    role: Literal["user", "assistant", "system"] = Field(..., description="The role of the message sender")
+    content: str = Field(..., description="The content of the message")
+
+
 class ChatRequest(BaseModel):
     """Request model for chat endpoint.
 
@@ -61,7 +74,7 @@ class ChatRequest(BaseModel):
         messages: List of messages in the conversation.
     """
 
-    messages: List[Message] = Field(
+    messages: List[ChatInputMessage] = Field(
         ...,
         description="List of messages in the conversation",
         min_length=1,
@@ -80,7 +93,7 @@ class ChatResponse(BaseResponse):
         messages: List of messages in the conversation.
     """
 
-    messages: List[Message] = Field(..., description="List of messages in the conversation")
+    messages: List[ChatOutputMessage] = Field(..., description="List of messages in the conversation")
 
 
 class StreamResponse(BaseResponse):

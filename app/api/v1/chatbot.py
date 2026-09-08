@@ -35,6 +35,7 @@ from app.schemas.chat import (
 )
 from app.services.session_naming import maybe_name_session
 from app.services.memory import memory_service
+from app.services.session_runs import SessionRunLease, session_run_lock_service
 from app.services.user_llm_settings import (
     UserLLMSettingsNotConfigured,
     UserLLMRuntimeConfig,
@@ -54,6 +55,14 @@ async def _require_user_llm(user_id: int) -> UserLLMRuntimeConfig:
         raise HTTPException(status_code=409, detail=str(exc))
     except UserLLMSettingsUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc))
+
+
+async def _acquire_session_run(session_id: str) -> SessionRunLease:
+    """Reject overlapping runs before either can read the same checkpoint."""
+    lease = await session_run_lock_service.try_acquire(session_id)
+    if lease is None:
+        raise HTTPException(status_code=409, detail="This session already has an active run.")
+    return lease
 
 
 @router.post("/chat", response_model=ChatResponse)
@@ -77,6 +86,7 @@ async def chat(
         HTTPException: If there's an error processing the request.
     """
     await _require_user_llm(session.user_id)
+    lease = await _acquire_session_run(session.id)
     try:
         logger.info(
             "chat_request_received",
@@ -102,6 +112,8 @@ async def chat(
     except Exception as e:
         logger.exception("chat_request_failed", session_id=session.id, error=str(e))
         raise HTTPException(status_code=500, detail="Agent request failed. Use X-Request-ID for support.")
+    finally:
+        await lease.release()
 
 
 @router.post("/chat/stream")
@@ -127,6 +139,7 @@ async def chat_stream(
     runtime = await _require_user_llm(session.user_id)
     model_name = runtime.model
     del runtime
+    lease = await _acquire_session_run(session.id)
     try:
         logger.info(
             "stream_chat_request_received",
@@ -203,6 +216,7 @@ async def chat_stream(
                         yield f"data: {json.dumps(error_response.model_dump(mode='json'))}\n\n"
                     finally:
                         stream_span.set_attribute("chunk_count", chunk_count)
+                        await lease.release()
 
         return StreamingResponse(
             event_generator(),
@@ -215,6 +229,7 @@ async def chat_stream(
         )
 
     except Exception as e:
+        await lease.release()
         logger.exception(
             "stream_chat_request_failed",
             session_id=session.id,
@@ -264,9 +279,12 @@ async def clear_chat_history(
     Returns:
         dict: A message indicating the chat history was cleared.
     """
+    lease = await _acquire_session_run(session.id)
     try:
         await agent.clear_chat_history(session.id)
         return {"message": "Chat history cleared successfully"}
     except Exception as e:
         logger.exception("clear_chat_history_failed", session_id=session.id, error=str(e))
         raise HTTPException(status_code=500, detail="Unable to clear messages.")
+    finally:
+        await lease.release()

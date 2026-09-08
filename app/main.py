@@ -2,6 +2,7 @@
 
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
+from typing import TypedDict
 
 from dotenv import load_dotenv
 from fastapi import (
@@ -132,6 +133,42 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)  # py
 
 
 # Add validation exception handler
+_SAFE_VALIDATION_MESSAGES = {
+    "missing": "Field required",
+    "string_too_short": "Text is shorter than allowed",
+    "string_too_long": "Text is longer than allowed",
+    "too_short": "Too few items",
+    "too_long": "Too many items",
+    "literal_error": "Unsupported value",
+    "extra_forbidden": "Unexpected field",
+    "json_invalid": "Invalid JSON",
+}
+
+
+class _SafeValidationError(TypedDict):
+    """Content-free validation detail safe to serialize into logs."""
+
+    location: list[str]
+    type: str
+    message: str
+
+
+def _safe_validation_errors(exc: RequestValidationError) -> list[_SafeValidationError]:
+    """Return content-free validation details suitable for logs and clients."""
+    sanitized: list[_SafeValidationError] = []
+    for error in exc.errors():
+        error_type = str(error.get("type", "validation_error"))
+        location = [str(part) for part in error.get("loc", ()) if part != "body"]
+        sanitized.append(
+            {
+                "location": location,
+                "type": error_type,
+                "message": _SAFE_VALIDATION_MESSAGES.get(error_type, "Invalid value"),
+            }
+        )
+    return sanitized
+
+
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
     """Handle validation errors from request data.
@@ -143,19 +180,17 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     Returns:
         JSONResponse: A formatted error response
     """
-    # Log the validation error
+    safe_errors = _safe_validation_errors(exc)
     logger.error(
         "validation_error",
         client_host=request.client.host if request.client else "unknown",
         path=request.url.path,
-        errors=str(exc.errors()),
+        errors=safe_errors,
     )
 
-    # Format the errors to be more user-friendly
-    formatted_errors = []
-    for error in exc.errors():
-        loc = " -> ".join([str(loc_part) for loc_part in error["loc"] if loc_part != "body"])
-        formatted_errors.append({"field": loc, "message": error["msg"]})
+    formatted_errors = [
+        {"field": " -> ".join(error["location"]), "message": error["message"]} for error in safe_errors
+    ]
 
     return JSONResponse(
         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,

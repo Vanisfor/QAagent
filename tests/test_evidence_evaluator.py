@@ -3,7 +3,8 @@
 import asyncio
 
 from app.schemas.knowledge import KnowledgeHit
-from app.schemas.retrieval import EvidenceAssessment, QueryPlan
+from app.schemas.retrieval import EvidenceAssessment, QueryPlan, RetrievalBundle
+from app.core.langgraph.tools.knowledge_search import _render_evidence_result
 from app.services.evidence_evaluator import EvidenceEvaluatorService
 
 
@@ -32,8 +33,8 @@ def test_evidence_assessment_alias_shape_fails_closed_without_answer() -> None:
     assert assessment.reason_code == "missing_evidence"
 
 
-def test_evidence_evaluator_fallback_accepts_existing_hits() -> None:
-    """An invalid evaluator response deterministically preserves available evidence."""
+def test_evidence_evaluator_failure_does_not_treat_hits_as_sufficient() -> None:
+    """Retrieved candidates survive without becoming an affirmative grade."""
     evaluator = EvidenceEvaluatorService(llm_factory=lambda runtime: FailingStructuredLLM())
 
     assessment = asyncio.run(
@@ -45,7 +46,7 @@ def test_evidence_evaluator_fallback_accepts_existing_hits() -> None:
         )
     )
 
-    assert assessment == EvidenceAssessment(sufficient=True, reason_code="sufficient")
+    assert assessment == EvidenceAssessment(sufficient=False, reason_code="evaluation_failed")
 
 
 def test_evidence_evaluator_fallback_rejects_missing_hits() -> None:
@@ -61,4 +62,19 @@ def test_evidence_evaluator_fallback_rejects_missing_hits() -> None:
         )
     )
 
-    assert assessment == EvidenceAssessment(sufficient=False, reason_code="missing_evidence")
+    assert assessment == EvidenceAssessment(sufficient=False, reason_code="evaluation_failed")
+
+
+def test_failed_grade_warning_reaches_the_answering_model() -> None:
+    """The tool keeps candidates but labels sufficiency as unconfirmed."""
+    hit = KnowledgeHit(content="candidate evidence", source="doc.md")
+    bundle = RetrievalBundle(
+        plan=QueryPlan(queries=["query"]),
+        hits=[hit],
+        assessment=EvidenceAssessment(sufficient=False, reason_code="evaluation_failed"),
+    )
+
+    rendered = _render_evidence_result(bundle)
+
+    assert "sufficiency to answer the question is unconfirmed" in rendered
+    assert "candidate evidence" in rendered

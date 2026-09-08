@@ -41,8 +41,9 @@ from app.core.logging import logger
 from app.core.metrics import llm_inference_duration_seconds
 from app.core.prompts import load_system_prompt
 from app.schemas import (
+    ChatInputMessage,
+    ChatOutputMessage,
     GraphState,
-    Message,
 )
 from app.services.llm import LLMService
 from app.services.memory import memory_service
@@ -365,23 +366,23 @@ class LangGraphAgent:
 
     async def get_response(
         self,
-        messages: list[Message],
+        messages: list[ChatInputMessage],
         session_id: str,
         user_id: Optional[str] = None,
         username: Optional[str] = None,
         reasoning_effort: str = "off",
-    ) -> list[Message]:
+    ) -> list[ChatOutputMessage]:
         """Get a response from the LLM.
 
         Args:
-            messages (list[Message]): The messages to send to the LLM.
+            messages: The validated user messages to send to the LLM.
             session_id (str): The session ID for the conversation.
             user_id (Optional[str]): The user ID for the conversation.
             username (Optional[str]): The display name of the user.
             reasoning_effort: DeepSeek reasoning mode for this request.
 
         Returns:
-            list[Message]: The response from the LLM.
+            list[ChatOutputMessage]: The response from the LLM.
         """
         graph = await self._get_graph()
         config: RunnableConfig = {
@@ -422,7 +423,7 @@ class LangGraphAgent:
             if state.next:
                 interrupt_value = state.tasks[0].interrupts[0].value if state.tasks else "Waiting for input."
                 logger.info("graph_interrupted", session_id=session_id, interrupt_value=str(interrupt_value))
-                return [Message(role="assistant", content=str(interrupt_value))]
+                return [ChatOutputMessage(role="assistant", content=str(interrupt_value))]
 
             openai_msgs = cast(list[dict], convert_to_openai_messages(response["messages"]))
             await memory_job_service.enqueue(user_id, openai_msgs, config.get("metadata"))
@@ -431,14 +432,14 @@ class LangGraphAgent:
             state = await graph.aget_state(config)
             interrupt_value = state.tasks[0].interrupts[0].value if state.tasks else "Waiting for input."
             logger.info("graph_interrupted", session_id=session_id, interrupt_value=str(interrupt_value))
-            return [Message(role="assistant", content=str(interrupt_value))]
+            return [ChatOutputMessage(role="assistant", content=str(interrupt_value))]
         except Exception as e:
             logger.exception("get_response_failed", error=str(e), session_id=session_id)
             raise
 
     async def get_stream_response(
         self,
-        messages: list[Message],
+        messages: list[ChatInputMessage],
         session_id: str,
         user_id: Optional[str] = None,
         username: Optional[str] = None,
@@ -447,7 +448,7 @@ class LangGraphAgent:
         """Get a stream response from the LLM.
 
         Args:
-            messages (list[Message]): The messages to send to the LLM.
+            messages: The validated user messages to send to the LLM.
             session_id (str): The session ID for the conversation.
             user_id (Optional[str]): The user ID for the conversation.
             username (Optional[str]): The display name of the user.
@@ -562,14 +563,14 @@ class LangGraphAgent:
             logger.exception("stream_processing_failed", error=str(stream_error), session_id=session_id)
             raise stream_error
 
-    async def get_chat_history(self, session_id: str) -> list[Message]:
+    async def get_chat_history(self, session_id: str) -> list[ChatOutputMessage]:
         """Get the chat history for a given thread ID.
 
         Args:
             session_id (str): The session ID for the conversation.
 
         Returns:
-            list[Message]: The chat history.
+            list[ChatOutputMessage]: The chat history.
         """
         graph = await self._get_graph()
 
@@ -577,11 +578,11 @@ class LangGraphAgent:
         state: StateSnapshot = await graph.aget_state(config=config)
         return self.__process_messages(state.values["messages"]) if state.values else []
 
-    def __process_messages(self, messages: list[BaseMessage]) -> list[Message]:
+    def __process_messages(self, messages: list[BaseMessage]) -> list[ChatOutputMessage]:
         openai_style_messages = convert_to_openai_messages(messages)
         # keep just assistant and user messages
         return [
-            Message(role=message["role"], content=str(message["content"]))
+            ChatOutputMessage(role=message["role"], content=str(message["content"]))
             for message in openai_style_messages
             if message["role"] in ["assistant", "user"] and message["content"]
         ]

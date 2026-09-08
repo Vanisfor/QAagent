@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
+from uuid import uuid4
 
 from sqlalchemy import literal_column, text
 from sqlalchemy.dialects.postgresql import insert
@@ -21,6 +22,7 @@ class ClaimedMemoryJob:
     messages: list[dict[str, Any]]
     metadata: dict[str, Any]
     attempts: int
+    lease_token: str
 
 
 class MemoryJobRepository:
@@ -60,6 +62,7 @@ class MemoryJobRepository:
 
     async def claim(self, stale_after_seconds: int) -> ClaimedMemoryJob | None:
         """Atomically claim one due or stale job using SKIP LOCKED."""
+        lease_token = uuid4().hex
         statement: Any = text(
             """
             WITH candidate AS (
@@ -76,16 +79,19 @@ class MemoryJobRepository:
                 LIMIT 1
             )
             UPDATE memory_job AS job
-            SET status = 'processing', locked_at = now(), attempts = job.attempts + 1
+            SET status = 'processing',
+                locked_at = now(),
+                lease_token = :lease_token,
+                attempts = job.attempts + 1
             FROM candidate
             WHERE job.id = candidate.id
-            RETURNING job.id, job.user_id, job.messages, job.metadata, job.attempts
+            RETURNING job.id, job.user_id, job.messages, job.metadata, job.attempts, job.lease_token
             """
         )
         async with self._session_factory() as session, session.begin():
             result = await session.exec(
                 statement,
-                params={"stale_after_seconds": stale_after_seconds},
+                params={"stale_after_seconds": stale_after_seconds, "lease_token": lease_token},
             )
             row = result.mappings().first()
         if row is None:
@@ -96,9 +102,26 @@ class MemoryJobRepository:
             messages=list(row["messages"]),
             metadata=dict(row["metadata"]),
             attempts=int(row["attempts"]),
+            lease_token=str(row["lease_token"]),
         )
 
-    async def succeed(self, job_id: int) -> None:
+    async def renew(self, job_id: int, lease_token: str) -> bool:
+        """Extend a processing lease only while this worker still owns it."""
+        statement: Any = text(
+            """
+            UPDATE memory_job
+            SET locked_at = now()
+            WHERE id = :job_id
+              AND status = 'processing'
+              AND lease_token = :lease_token
+            RETURNING id
+            """
+        )
+        async with self._session_factory() as session, session.begin():
+            result = await session.exec(statement, params={"job_id": job_id, "lease_token": lease_token})
+            return result.scalar_one_or_none() is not None
+
+    async def succeed(self, job_id: int, lease_token: str) -> bool:
         """Complete a job, retaining only its idempotency ledger entry."""
         async with self._session_factory() as session, session.begin():
             statement: Any = text(
@@ -108,16 +131,21 @@ class MemoryJobRepository:
                     messages = '[]'::jsonb,
                     metadata = '{}'::jsonb,
                     locked_at = NULL,
+                    lease_token = NULL,
                     last_error = NULL
                 WHERE id = :job_id
+                  AND status = 'processing'
+                  AND lease_token = :lease_token
+                RETURNING id
                 """
             )
-            await session.exec(
+            result = await session.exec(
                 statement,
-                params={"job_id": job_id},
+                params={"job_id": job_id, "lease_token": lease_token},
             )
+            return result.scalar_one_or_none() is not None
 
-    async def fail(self, job_id: int, attempts: int, max_attempts: int, error: str) -> None:
+    async def fail(self, job_id: int, lease_token: str, attempts: int, max_attempts: int, error: str) -> bool:
         """Retry with exponential delay or park a permanently failed job."""
         terminal = attempts >= max_attempts
         delay_seconds = min(300, 2 ** max(0, attempts - 1))
@@ -127,8 +155,12 @@ class MemoryJobRepository:
             SET status = :status,
                 available_at = now() + make_interval(secs => :delay_seconds),
                 locked_at = NULL,
+                lease_token = NULL,
                 last_error = :error
             WHERE id = :job_id
+              AND status = 'processing'
+              AND lease_token = :lease_token
+            RETURNING id
             """
         )
         params = {
@@ -136,9 +168,11 @@ class MemoryJobRepository:
             "delay_seconds": delay_seconds,
             "error": error[:2000],
             "job_id": job_id,
+            "lease_token": lease_token,
         }
         async with self._session_factory() as session, session.begin():
-            await session.exec(
+            result = await session.exec(
                 statement,
                 params=params,
             )
+            return result.scalar_one_or_none() is not None

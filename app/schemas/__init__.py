@@ -3,9 +3,10 @@
 from app.schemas.auth import Token
 from app.schemas.base import BaseResponse
 from app.schemas.chat import (
+    ChatInputMessage,
+    ChatOutputMessage,
     ChatRequest,
     ChatResponse,
-    Message,
     StreamResponse,
 )
 from app.schemas.graph import GraphState
@@ -13,9 +14,10 @@ from app.schemas.graph import GraphState
 __all__ = [
     "Token",
     "BaseResponse",
+    "ChatInputMessage",
+    "ChatOutputMessage",
     "ChatRequest",
     "ChatResponse",
-    "Message",
     "StreamResponse",
     "GraphState",
 ]

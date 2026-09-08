@@ -183,7 +183,8 @@ class Settings:
         self.LONG_TERM_MEMORY_COLLECTION_NAME = os.getenv("LONG_TERM_MEMORY_COLLECTION_NAME", "longterm_memory")
         self.MEMORY_JOB_POLL_SECONDS = float(os.getenv("MEMORY_JOB_POLL_SECONDS", "1"))
         self.MEMORY_JOB_MAX_ATTEMPTS = int(os.getenv("MEMORY_JOB_MAX_ATTEMPTS", "5"))
-        self.MEMORY_JOB_STALE_AFTER_SECONDS = int(os.getenv("MEMORY_JOB_STALE_AFTER_SECONDS", "300"))
+        self.MEMORY_JOB_STALE_AFTER_SECONDS = max(1, int(os.getenv("MEMORY_JOB_STALE_AFTER_SECONDS", "300")))
+        self.MEMORY_JOB_HEARTBEAT_SECONDS = max(0.1, float(os.getenv("MEMORY_JOB_HEARTBEAT_SECONDS", "30")))
         self.MEMORY_JOB_SHUTDOWN_TIMEOUT = float(os.getenv("MEMORY_JOB_SHUTDOWN_TIMEOUT", "10"))
         self.KNOWLEDGE_SYNC_WORKER_ENABLED = os.getenv("KNOWLEDGE_SYNC_WORKER_ENABLED", "false").lower() == "true"
         self.KNOWLEDGE_SYNC_POLL_SECONDS = float(os.getenv("KNOWLEDGE_SYNC_POLL_SECONDS", "5"))

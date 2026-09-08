@@ -4,12 +4,16 @@ from datetime import timedelta
 
 from pydantic import ValidationError
 from pytest import raises
+from fastapi.exceptions import RequestValidationError
 
 from app.core.evidence import build_evidence_block
+from app.main import _safe_validation_errors
 from app.models.user import User
 from app.schemas.chat import (
+    ChatInputMessage,
+    ChatOutputMessage,
     ChatRequest,
-    Message,
+    ChatResponse,
 )
 from app.schemas.knowledge import KnowledgeHit
 from app.utils.auth import (
@@ -35,9 +39,46 @@ def test_password_special_characters_round_trip_without_sanitization() -> None:
 
 def test_chat_request_rejects_excessive_message_count() -> None:
     """Bounded message lists prevent request and token amplification."""
-    messages = [Message(role="user", content=f"message {index}") for index in range(21)]
+    messages = [ChatInputMessage(role="user", content=f"message {index}") for index in range(21)]
     with raises(ValidationError):
         ChatRequest(messages=messages)
+
+
+def test_chat_output_allows_long_code_with_script_tags() -> None:
+    """Model output and history must not reuse untrusted input constraints."""
+    content = "```html\n<script>alert('example')</script>\n```\n" + ("x" * 3001)
+
+    response = ChatResponse(messages=[ChatOutputMessage(role="assistant", content=content)])
+
+    assert response.messages[0].content == content
+
+
+def test_chat_input_still_rejects_script_tags() -> None:
+    """Splitting output validation must not weaken the request boundary."""
+    with raises(ValidationError):
+        ChatInputMessage(role="user", content="<script>alert('unsafe')</script>")
+
+
+def test_validation_log_details_exclude_original_input() -> None:
+    """Pydantic's raw input must not survive the logging projection."""
+    sensitive_value = "private-user-input-value"
+    try:
+        ChatInputMessage(role="user", content=f"{sensitive_value}\0")
+    except ValidationError as error:
+        request_error = RequestValidationError(error.errors())
+    else:
+        raise AssertionError("invalid input unexpectedly passed validation")
+
+    safe_errors = _safe_validation_errors(request_error)
+
+    assert sensitive_value not in str(safe_errors)
+    assert safe_errors == [
+        {
+            "location": ["content"],
+            "type": "value_error",
+            "message": "Invalid value",
+        }
+    ]
 
 
 def test_evidence_block_removes_instructions_and_forges_no_boundaries() -> None:

@@ -6,7 +6,6 @@ from langchain_core.messages import trim_messages as _trim_messages
 
 from app.core.config import settings
 from app.core.logging import logger
-from app.schemas import Message
 
 # DeepSeek model names are not mapped by tiktoken. Avoid an import-time network
 # download for OpenAI's fallback vocabulary; use a conservative local estimate.
@@ -51,16 +50,16 @@ def _count_tokens_tiktoken(messages: list) -> int:
     return num_tokens
 
 
-def dump_messages(messages: list[Message]) -> list[dict]:
+def dump_messages(messages: list) -> list[dict]:
     """Dump the messages to a list of dictionaries.
 
     Args:
-        messages (list[Message]): The messages to dump.
+        messages: Pydantic/LangChain message objects or message dictionaries.
 
     Returns:
         list[dict]: The dumped messages.
     """
-    return [message.model_dump() for message in messages]
+    return [dict(message) if isinstance(message, dict) else message.model_dump() for message in messages]
 
 
 def extract_text_content(content: str | list) -> str:
@@ -113,15 +112,15 @@ def process_llm_response(response: BaseMessage) -> BaseMessage:
     return response
 
 
-def prepare_messages(messages: list[Message], system_prompt: str) -> list[Message]:
+def prepare_messages(messages: list, system_prompt: str) -> list:
     """Prepare the messages for the LLM.
 
     Args:
-        messages (list[Message]): The messages to prepare.
+        messages: The messages to prepare.
         system_prompt (str): The system prompt to use.
 
     Returns:
-        list[Message]: The prepared messages.
+        list: The prepared messages.
     """
     try:
         trimmed_messages = _trim_messages(
@@ -146,4 +145,4 @@ def prepare_messages(messages: list[Message], system_prompt: str) -> list[Messag
         else:
             raise
 
-    return [Message(role="system", content=system_prompt)] + trimmed_messages
+    return [{"role": "system", "content": system_prompt}] + trimmed_messages

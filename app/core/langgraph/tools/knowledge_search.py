@@ -18,6 +18,20 @@ from app.services.knowledge import (
 from app.services.knowledge_access import knowledge_access_service
 from app.services.user_llm_settings import user_llm_settings_service
 from app.schemas.knowledge import RetrievalContext
+from app.schemas.retrieval import RetrievalBundle
+
+
+def _render_evidence_result(bundle: RetrievalBundle) -> str:
+    """Render hits with an explicit warning when grading was unavailable."""
+    evidence = build_evidence_block(bundle.hits)
+    if bundle.assessment.reason_code == "evaluation_failed":
+        return (
+            "Evidence evaluation was unavailable. The passages below are retrieval candidates, "
+            "but their sufficiency to answer the question is unconfirmed. State that limitation "
+            "and do not present unsupported conclusions as established facts.\n\n"
+            f"{evidence}"
+        )
+    return evidence
 
 
 @tool
@@ -65,5 +79,10 @@ async def knowledge_search(query: str, config: RunnableConfig, top_k: int = 5) -
             "in the user's authorized knowledge spaces; do not infer private facts from general model knowledge."
         )
 
-    logger.info("knowledge_search_tool_used", hits=len(hits), query_length=len(query))
-    return build_evidence_block(hits)
+    logger.info(
+        "knowledge_search_tool_used",
+        hits=len(hits),
+        query_length=len(query),
+        evidence_status=bundle.assessment.reason_code,
+    )
+    return _render_evidence_result(bundle)

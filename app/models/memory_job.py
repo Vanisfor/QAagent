@@ -25,4 +25,5 @@ class MemoryJob(BaseModel, table=True):
     attempts: int = Field(default=0)
     available_at: datetime
     locked_at: datetime | None = Field(default=None)
+    lease_token: str | None = Field(default=None, max_length=32)
     last_error: str | None = Field(default=None, sa_column=Column(Text, nullable=True))

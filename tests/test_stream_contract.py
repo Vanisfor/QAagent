@@ -4,8 +4,8 @@ from pydantic import ValidationError
 from pytest import raises
 
 from app.schemas.chat import (
+    ChatInputMessage,
     ChatRequest,
-    Message,
     StreamResponse,
 )
 from app.services.memory import MemoryService
@@ -13,7 +13,7 @@ from app.services.memory import MemoryService
 
 def test_chat_request_accepts_supported_reasoning_effort() -> None:
     """Reasoning effort should be explicit and default to off."""
-    messages = [Message(role="user", content="hello")]
+    messages = [ChatInputMessage(role="user", content="hello")]
     assert ChatRequest(messages=messages).reasoning_effort == "off"
     assert ChatRequest(messages=messages, reasoning_effort="max").reasoning_effort == "max"
 
@@ -21,7 +21,7 @@ def test_chat_request_accepts_supported_reasoning_effort() -> None:
 def test_chat_request_rejects_unknown_reasoning_effort() -> None:
     """Unknown provider effort levels should fail validation."""
     with raises(ValidationError):
-        ChatRequest(messages=[Message(role="user", content="hello")], reasoning_effort="medium")
+        ChatRequest(messages=[ChatInputMessage(role="user", content="hello")], reasoning_effort="medium")
 
 
 def test_stream_response_supports_structured_usage_event() -> None:

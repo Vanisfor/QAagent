@@ -1,6 +1,6 @@
 # QA Agent
 
-一个面向中文问答场景的全栈 Agent 项目。后端基于 FastAPI、LangGraph、DeepSeek、PostgreSQL 与 pgvector，前端基于 React、TypeScript 和 Vite；当前已包含账号体系、流式问答、RAG、本地 tracing、指标监控，以及 Token、缓存命中与推理过程展示。
+一个面向中文问答场景的全栈 Agent 项目。后端基于 FastAPI、LangGraph、DeepSeek、PostgreSQL、pgvector 与 OpenSearch，前端基于 React、TypeScript 和 Vite；当前已包含账号体系、流式问答、ACL 感知的混合 RAG、本地 tracing、指标监控，以及 Token、缓存命中与推理过程展示。
 
 > 本文优先解决“如何在本地从零跑通项目”。推荐开发方式是：数据库和后端运行在 Docker 中，前端运行在本机。
 
@@ -25,8 +25,10 @@ PostgreSQL + pgvector :5433
 
 - DeepSeek `deepseek-v4-flash` 模型调用与流式输出
 - LangGraph 状态图、工具调用和 PostgreSQL checkpoint
-- 基于 pgvector 与 `BAAI/bge-m3` 的文档导入和语义检索
+- 基于 pgvector、PostgreSQL FTS、OpenSearch、RRF 与 `BAAI/bge-m3` 的混合检索
+- 知识空间、文档和切片级的组织/用户/用户组 ACL，在排序前过滤并在 PostgreSQL 回查时复验
 - JWT 登录、注册、会话与消息历史
+- PostgreSQL checkpoint、同会话跨 Worker 运行互斥，以及带所有权 token/心跳续租的长期记忆任务
 - React + TypeScript 聊天页面
 - 实时 Token、缓存命中率、reasoning effort 与推理内容面板
 - 仅记录性能、调用链、Token 和 Error 的本地 tracing
@@ -146,18 +148,21 @@ make docker-up ENV=development
 make docker-migrate ENV=development
 ```
 
-确认后端健康：
+分别确认进程存活和依赖就绪：
 
 ```powershell
-Invoke-RestMethod http://127.0.0.1:8001/health
+Invoke-RestMethod http://127.0.0.1:8001/live
+Invoke-RestMethod http://127.0.0.1:8001/ready
 ```
 
 也可以直接打开：
 
-- API 健康检查：<http://localhost:8001/health>
+- API 存活检查：<http://localhost:8001/live>
+- API 就绪检查：<http://localhost:8001/ready>
+- 兼容入口（行为等同 `/ready`）：<http://localhost:8001/health>
 - Swagger API 文档：<http://localhost:8001/docs>
 
-健康接口返回 `status: healthy`，并且 `database` 为 `healthy`，才表示数据库与后端已经连通。
+`/live` 返回 `status: alive` 只表示进程仍在运行；`/ready`（以及兼容的 `/health`）返回 HTTP 200、`status: ready`，且 `components.api/database/graph` 都为 `ready`，才表示实例可以接收 Agent 流量。依赖未就绪时返回 HTTP 503 和 `status: not_ready`。
 
 ## 四、启动 React 前端
 
@@ -222,7 +227,7 @@ uv run python scripts/ingest_docs.py ".\knowledge" --reset
 
 建议按下面的顺序验证，而不是只看首页能否打开：
 
-1. 访问 <http://localhost:8001/health>，确认 API 和数据库都是健康状态。
+1. 访问 <http://localhost:8001/live> 与 <http://localhost:8001/ready>，分别确认进程存活和依赖就绪。
 2. 访问 <http://localhost:3002>，注册一个测试账号。
 3. 密码至少 8 位，并同时包含大写字母、小写字母、数字和特殊字符。
 4. 登录后创建会话，发送一条普通问题，确认能够收到流式回复。
@@ -256,6 +261,7 @@ docker compose --env-file .env.development up -d
 - Error 类型与状态
 
 trace 不记录 prompt、回答、工具参数、检索文档、密钥或原始推理内容。
+请求校验错误日志也只保留字段位置、错误类型和筛选后的描述，不记录 Pydantic 错误对象携带的原始输入。
 
 默认文件位置：
 
@@ -317,7 +323,7 @@ pnpm build
 
 先检查：
 
-1. <http://localhost:8001/health> 是否健康。
+1. <http://localhost:8001/live> 是否存活，<http://localhost:8001/ready> 是否就绪。
 2. 是否执行过 Alembic migration。
 3. 密码是否同时包含大小写字母、数字和特殊字符。
 4. `docker compose --env-file .env.development logs app` 中是否有数据库或配置错误。
@@ -364,7 +370,7 @@ docs/                  架构与可观测性文档
 
 - HTTPS、反向代理与安全响应头的生产配置
 - 使用 HttpOnly Cookie 或同等级方案保护浏览器令牌
-- 私有知识库的用户/租户 ACL 隔离
+- 在现有应用层组织/用户/用户组 ACL 之外增加 PostgreSQL RLS 纵深防御，并用真实身份源验证用户组映射生命周期
 - 生产级密钥管理、数据库备份和恢复演练
 - 关闭 `DEBUG` 和 `EXPOSE_REASONING_CONTENT`
 - 根据实际容量完成压力测试、限流与连接池调优

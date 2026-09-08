@@ -7,9 +7,13 @@ from typing import Any
 
 from app.core.config import settings
 from app.core.logging import logger
-from app.repositories.memory_jobs import MemoryJobRepository
+from app.repositories.memory_jobs import ClaimedMemoryJob, MemoryJobRepository
 from app.services.database import database_service
 from app.services.memory import memory_service
+
+
+class MemoryJobLeaseLost(RuntimeError):
+    """Raised when another worker has taken ownership of a stale job."""
 
 
 class MemoryJobService:
@@ -81,10 +85,13 @@ class MemoryJobService:
                     continue
 
                 try:
-                    await memory_service.add(job.user_id, job.messages, job.metadata)
+                    await self._process_with_heartbeat(job)
+                except MemoryJobLeaseLost:
+                    logger.warning("memory_job_lease_lost", job_id=job.id, attempt=job.attempts)
                 except Exception as error:
-                    await self._repository.fail(
+                    settled = await self._repository.fail(
                         job.id,
+                        job.lease_token,
                         job.attempts,
                         settings.MEMORY_JOB_MAX_ATTEMPTS,
                         f"{type(error).__name__}: {error}",
@@ -94,10 +101,14 @@ class MemoryJobService:
                         job_id=job.id,
                         attempt=job.attempts,
                         terminal=job.attempts >= settings.MEMORY_JOB_MAX_ATTEMPTS,
+                        lease_owned=settled,
                     )
                 else:
-                    await self._repository.succeed(job.id)
-                    logger.info("memory_job_processed", job_id=job.id, attempt=job.attempts)
+                    settled = await self._repository.succeed(job.id, job.lease_token)
+                    if settled:
+                        logger.info("memory_job_processed", job_id=job.id, attempt=job.attempts)
+                    else:
+                        logger.warning("memory_job_settlement_rejected", job_id=job.id, attempt=job.attempts)
             except asyncio.CancelledError:
                 raise
             except Exception as error:
@@ -106,6 +117,26 @@ class MemoryJobService:
                     await asyncio.wait_for(self._stop.wait(), timeout=settings.MEMORY_JOB_POLL_SECONDS)
                 except TimeoutError:
                     pass
+
+    async def _process_with_heartbeat(self, job: ClaimedMemoryJob) -> None:
+        """Process one job while periodically renewing its ownership lease."""
+        heartbeat_seconds = max(
+            0.1,
+            min(settings.MEMORY_JOB_HEARTBEAT_SECONDS, settings.MEMORY_JOB_STALE_AFTER_SECONDS / 3),
+        )
+        processing = asyncio.create_task(memory_service.add(job.user_id, job.messages, job.metadata))
+        try:
+            while not processing.done():
+                done, _ = await asyncio.wait({processing}, timeout=heartbeat_seconds)
+                if processing in done:
+                    break
+                if not await self._repository.renew(job.id, job.lease_token):
+                    raise MemoryJobLeaseLost(f"memory job {job.id} lease ownership was lost")
+            await processing
+        finally:
+            if not processing.done():
+                processing.cancel()
+                await asyncio.gather(processing, return_exceptions=True)
 
 
 memory_job_service = MemoryJobService()

@@ -83,17 +83,22 @@ def test_memory_job_claim_and_completion_are_durable_and_idempotent() -> None:
             job = await repository.claim(stale_after_seconds=300)
             assert job is not None
             assert job.messages[0]["content"] == "remember this"
-            await repository.succeed(job.id)
+            assert not await repository.succeed(job.id, "stale-owner-token")
+            assert await repository.succeed(job.id, job.lease_token)
 
             async with database_service.session_factory() as session:
                 result = await session.exec(
-                    cast(Any, text("SELECT status, messages, metadata FROM memory_job WHERE id = :job_id")),
+                    cast(
+                        Any,
+                        text("SELECT status, messages, metadata, lease_token FROM memory_job WHERE id = :job_id"),
+                    ),
                     params={"job_id": job.id},
                 )
                 row = result.mappings().one()
             assert row["status"] == "completed"
             assert row["messages"] == []
             assert row["metadata"] == {}
+            assert row["lease_token"] is None
             assert not await repository.enqueue(
                 idempotency_key=key,
                 user_id="7",

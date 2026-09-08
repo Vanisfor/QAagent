@@ -5,17 +5,23 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from fastapi import Request
+from fastapi import HTTPException, Request
 from langchain_core.tools import tool
 from langgraph.errors import GraphInterrupt
 
 from app.api.v1.auth import db_service
+from app.api.v1.chatbot import _acquire_session_run, session_run_lock_service
+from app.core.config import settings
 from app.core.langgraph.tool_executor import ToolExecutor
 from app.core.langgraph.tool_policy import TOOL_POLICIES, ToolIdempotency, ToolPolicy, get_tool_policy
 from app.core.middleware import route_template
 from app.main import _readiness_response, agent, liveness_check
 from app.services.database import database_service
 from app.services.memory_jobs import MemoryJobService
+from app.repositories.memory_jobs import ClaimedMemoryJob
+from app.services.memory_jobs import MemoryJobLeaseLost
+from app.services.memory import memory_service
+from app.services.session_runs import SessionRunLockService
 
 
 def test_auth_uses_shared_database_service() -> None:
@@ -130,3 +136,94 @@ def test_memory_job_idempotency_key_is_stable() -> None:
     asyncio.run(service.enqueue("7", messages, {"session_id": "session-1"}))
     assert len(keys) == 2
     assert keys[0] == keys[1]
+
+
+def test_session_run_lock_rejects_an_existing_owner() -> None:
+    """A failed PostgreSQL advisory-lock attempt must close its connection."""
+
+    class Result:
+        def scalar_one(self) -> bool:
+            return False
+
+    class Session:
+        def __init__(self) -> None:
+            self.closed = False
+
+        async def exec(self, statement: Any, *, params: dict[str, Any]) -> Result:
+            return Result()
+
+        async def close(self) -> None:
+            self.closed = True
+
+    session = Session()
+    service = SessionRunLockService(lambda: session)  # type: ignore[arg-type]
+
+    assert asyncio.run(service.try_acquire("session-1")) is None
+    assert session.closed is True
+
+
+def test_overlapping_session_run_returns_conflict(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The API contract rejects a second run with HTTP 409 instead of queuing."""
+
+    async def deny_lock(session_id: str) -> None:
+        return None
+
+    monkeypatch.setattr(session_run_lock_service, "try_acquire", deny_lock)
+
+    with pytest.raises(HTTPException) as error:
+        asyncio.run(_acquire_session_run("session-1"))
+
+    assert error.value.status_code == 409
+
+
+def test_memory_job_renews_lease_during_long_processing(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Long mem0 writes heartbeat before their stale-claim window."""
+    service = MemoryJobService()
+    renewals = 0
+
+    class Repository:
+        async def renew(self, job_id: int, lease_token: str) -> bool:
+            nonlocal renewals
+            renewals += 1
+            return True
+
+    async def slow_add(user_id: str, messages: list[dict], metadata: dict) -> None:
+        await asyncio.sleep(0.12)
+
+    service._repository = Repository()  # type: ignore[assignment]
+    monkeypatch.setattr(memory_service, "add", slow_add)
+    monkeypatch.setattr(settings, "MEMORY_JOB_HEARTBEAT_SECONDS", 0.1)
+    monkeypatch.setattr(settings, "MEMORY_JOB_STALE_AFTER_SECONDS", 1)
+    job = ClaimedMemoryJob(1, "7", [], {}, 1, "owner-token")
+
+    asyncio.run(service._process_with_heartbeat(job))
+
+    assert renewals >= 1
+
+
+def test_memory_job_cancels_processing_after_lease_loss(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An old worker stops work instead of settling a newly claimed job."""
+    service = MemoryJobService()
+    cancelled = False
+
+    class Repository:
+        async def renew(self, job_id: int, lease_token: str) -> bool:
+            return False
+
+    async def blocked_add(user_id: str, messages: list[dict], metadata: dict) -> None:
+        nonlocal cancelled
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled = True
+
+    service._repository = Repository()  # type: ignore[assignment]
+    monkeypatch.setattr(memory_service, "add", blocked_add)
+    monkeypatch.setattr(settings, "MEMORY_JOB_HEARTBEAT_SECONDS", 0.1)
+    monkeypatch.setattr(settings, "MEMORY_JOB_STALE_AFTER_SECONDS", 1)
+    job = ClaimedMemoryJob(1, "7", [], {}, 1, "old-owner-token")
+
+    with pytest.raises(MemoryJobLeaseLost):
+        asyncio.run(service._process_with_heartbeat(job))
+
+    assert cancelled is True

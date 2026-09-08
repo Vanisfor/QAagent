@@ -34,7 +34,7 @@ class EvidenceEvaluatorService:
         *,
         runtime: UserLLMRuntimeConfig | Any,
     ) -> EvidenceAssessment:
-        """Assess evidence and fail safely to a deterministic availability rule."""
+        """Assess evidence without equating retrieval hits with sufficiency."""
         try:
             evidence = build_evidence_block(hits) if hits else "<evidence></evidence>"
             with trace_span("retrieval.evaluate", hit_count=len(hits)):
@@ -59,8 +59,8 @@ class EvidenceEvaluatorService:
         except Exception as error:
             logger.exception("evidence_evaluation_failed", error_type=type(error).__name__)
             return EvidenceAssessment(
-                sufficient=bool(hits),
-                reason_code="sufficient" if hits else "missing_evidence",
+                sufficient=False,
+                reason_code="evaluation_failed",
                 rewritten_queries=[],
             )
 

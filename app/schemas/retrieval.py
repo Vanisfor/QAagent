@@ -104,7 +104,13 @@ class EvidenceAssessment(BaseModel):
     model_config = {"extra": "forbid"}
 
     sufficient: bool
-    reason_code: Literal["sufficient", "missing_evidence", "conflicting_evidence", "not_evaluated"]
+    reason_code: Literal[
+        "sufficient",
+        "missing_evidence",
+        "conflicting_evidence",
+        "not_evaluated",
+        "evaluation_failed",
+    ]
     rewritten_queries: list[str] = Field(default_factory=list, max_length=3)
 
     @model_validator(mode="before")
