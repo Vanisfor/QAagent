@@ -48,10 +48,33 @@ class KnowledgeAccessService:
         if requested:
             space_query: Any = text(
                 """
-                SELECT slug FROM knowledge_spaces
-                WHERE organization_id = ANY(CAST(:organization_ids AS bigint[]))
-                  AND slug = ANY(CAST(:requested AS text[]))
-                ORDER BY slug
+                SELECT DISTINCT space.slug
+                FROM knowledge_spaces AS space
+                WHERE space.organization_id = ANY(CAST(:organization_ids AS bigint[]))
+                  AND space.slug = ANY(CAST(:requested AS text[]))
+                  AND (
+                      space.is_public
+                      OR EXISTS (
+                          SELECT 1 FROM knowledge_space_principals AS acl
+                          WHERE acl.space_id = space.id
+                            AND (
+                                (acl.principal_type = 'user' AND acl.principal_id = :user_principal)
+                                OR (acl.principal_type = 'group' AND acl.principal_id = ANY(CAST(:group_ids AS text[])))
+                            )
+                      )
+                      OR EXISTS (
+                          SELECT 1
+                          FROM knowledge_documents AS document
+                          JOIN knowledge_document_principals AS acl ON acl.document_id = document.id
+                          WHERE document.space_id = space.id
+                            AND document.deleted_at IS NULL
+                            AND (
+                                (acl.principal_type = 'user' AND acl.principal_id = :user_principal)
+                                OR (acl.principal_type = 'group' AND acl.principal_id = ANY(CAST(:group_ids AS text[])))
+                            )
+                      )
+                  )
+                ORDER BY space.slug
                 """
             )
             async with database_service.session_factory() as session:
@@ -60,7 +83,12 @@ class KnowledgeAccessService:
                     for row in (
                         await session.exec(
                             space_query,
-                            params={"organization_ids": list(organization_ids), "requested": requested},
+                            params={
+                                "organization_ids": list(organization_ids),
+                                "requested": requested,
+                                "user_principal": str(user_id),
+                                "group_ids": list(group_ids),
+                            },
                         )
                     )
                     .mappings()
@@ -73,6 +101,7 @@ class KnowledgeAccessService:
             organization_ids=organization_ids,
             group_ids=group_ids,
             space_slugs=tuple(valid_spaces),
+            space_scope_requested=bool(requested),
         )
 
 

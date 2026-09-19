@@ -36,6 +36,8 @@ from app.services.knowledge import knowledge_service
 from app.services.memory import memory_service
 from app.services.memory_jobs import memory_job_service
 from app.services.knowledge_sync_worker import knowledge_sync_worker
+from app.services.knowledge_ingestion_jobs import knowledge_ingestion_job_service
+from app.core.skills.registry import skill_registry
 
 # Load environment variables
 load_dotenv()
@@ -50,6 +52,17 @@ async def lifespan(app: FastAPI):
         version=settings.VERSION,
         api_prefix=settings.API_V1_STR,
     )
+    skill_registry.configure(
+        settings.SKILL_ROOTS,
+        max_metadata_bytes=settings.SKILL_MAX_METADATA_BYTES,
+        max_skill_bytes=settings.SKILL_MAX_FILE_BYTES,
+        max_skill_tokens=settings.SKILL_MAX_BODY_TOKENS,
+        max_catalog_tokens=settings.SKILL_CATALOG_MAX_TOKENS,
+    )
+    skill_registry.discover()
+    missing_skills = skill_registry.missing_required(settings.REQUIRED_SKILLS)
+    if missing_skills:
+        raise RuntimeError(f"required Skills are unavailable: {', '.join(missing_skills)}")
 
     # Initialize cache service (connects to Valkey if configured)
     try:
@@ -85,6 +98,11 @@ async def lifespan(app: FastAPI):
         logger.exception("knowledge_service_pre_warm_failed", error=str(e))
 
     try:
+        await knowledge_ingestion_job_service.start()
+    except Exception as e:
+        logger.exception("knowledge_ingestion_worker_start_failed", error=str(e))
+
+    try:
         await knowledge_sync_worker.start()
     except Exception as e:
         logger.exception("knowledge_sync_worker_start_failed", error=str(e))
@@ -95,6 +113,7 @@ async def lifespan(app: FastAPI):
     # Cleanup on shutdown
     await cache_service.close()
     await knowledge_sync_worker.stop()
+    await knowledge_ingestion_job_service.stop()
     await knowledge_service.close()
     await memory_job_service.stop()
     await database_service.engine.dispose()
@@ -256,7 +275,9 @@ async def _readiness_response() -> JSONResponse:
     """Build the dependency-aware readiness response."""
     database_ready = await database_service.health_check()
     graph_ready = agent.is_ready
-    ready = database_ready and graph_ready
+    missing_skills = skill_registry.missing_required(settings.REQUIRED_SKILLS)
+    skills_ready = not missing_skills
+    ready = database_ready and graph_ready and skills_ready
     response = {
         "status": "ready" if ready else "not_ready",
         "version": settings.VERSION,
@@ -265,6 +286,12 @@ async def _readiness_response() -> JSONResponse:
             "api": "ready",
             "database": "ready" if database_ready else "not_ready",
             "graph": "ready" if graph_ready else "not_ready",
+            "skills": {
+                "status": "ready" if skills_ready else "not_ready",
+                "count": len(skill_registry.skills),
+                "catalog_digest": skill_registry.catalog_digest[:12],
+                "missing_required": list(missing_skills),
+            },
         },
         "timestamp": datetime.now(UTC).isoformat(),
     }

@@ -75,3 +75,30 @@ export interface LLMSettingsInput {
   max_tokens: number;
   thinking_enabled: boolean;
 }
+
+export interface KnowledgeSpace {
+  slug: string;
+  name: string;
+  role: "reader" | "editor" | "owner";
+  is_public: boolean;
+  document_count: number;
+}
+
+export interface KnowledgeDocument {
+  id: number;
+  source: string;
+  title: string;
+  status: "available" | "deleted";
+  updated_at: string;
+}
+
+export interface KnowledgeIngestionJob {
+  id: number;
+  space_slug: string;
+  file_name: string;
+  status: "pending" | "processing" | "completed" | "failed";
+  attempts: number;
+  document_id: number | null;
+  error: string | null;
+  created_at: string;
+}

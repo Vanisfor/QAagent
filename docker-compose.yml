@@ -77,7 +77,10 @@ services:
       - "127.0.0.1:${APP_PUBLISHED_PORT:-8000}:8000"
     volumes:
       - ./app:/app/app
+      - ./skills:/app/skills:ro
       - ./logs:/app/logs
+      - ./data/user-media:/app/data/user-media
+      - ./data/knowledge-uploads:/app/data/knowledge-uploads
     env_file:
       - .env.${APP_ENV:-development}
     environment:

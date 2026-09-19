@@ -36,6 +36,12 @@ cp .env.example .env.development
 | `AGENT_CONTEXT_MAX_TOKENS` | `12000` | No | Input-message budget; sized separately so retrieved evidence is not dropped with the response limit |
 | `MAX_LLM_CALL_RETRIES` | `3` | No | Retries per model before switching to fallback |
 | `LLM_TOTAL_TIMEOUT` | `60` | No | Max seconds for the entire fallback loop |
+| `AGENT_TOOL_CALL_BUDGET` | `2` | No | Per-turn read-only business-tool executions; Skill activation is separate |
+| `AGENT_CONTROL_TOOL_CALL_BUDGET` | `1` | No | Per-turn control operations such as Skill activation |
+| `AGENT_INTERACTIVE_TOOL_CALL_BUDGET` | `1` | No | Per-turn human-interaction tool executions |
+| `AGENT_SIDE_EFFECT_TOOL_CALL_BUDGET` | `1` | No | Fail-safe budget for future side-effect tools |
+| `AGENT_TOTAL_TOOL_CALL_BUDGET` | `3` | No | Total actual tool executions across all classes |
+| `AGENT_RECURSION_LIMIT` | `25` | No | Final LangGraph recursion safety ceiling |
 | `SESSION_NAMING_ENABLED` | `true` | No | Auto-generate a session title from the user's first message using an LLM background task |
 
 ---
@@ -47,6 +53,22 @@ cp .env.example .env.development
 | `LONG_TERM_MEMORY_COLLECTION_NAME` | `longterm_memory` | pgvector collection name |
 | `LONG_TERM_MEMORY_MODEL` | `deepseek-v4-flash` | Official DeepSeek LLM used by mem0 to extract memories |
 | `LONG_TERM_MEMORY_EMBEDDER_MODEL` | `BAAI/bge-m3` | SiliconFlow embedding model for semantic search |
+
+## Skills and personal knowledge
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `SKILL_ROOTS` | `skills` | Comma-separated reviewed Skill roots |
+| `REQUIRED_SKILLS` | empty | Names that must exist for startup/readiness |
+| `SKILL_MAX_METADATA_BYTES` | `65536` | Maximum frontmatter bytes before its closing delimiter |
+| `SKILL_MAX_FILE_BYTES` | `524288` | Maximum total Skill file bytes |
+| `SKILL_MAX_BODY_TOKENS` | `4000` | Maximum estimated instruction-body tokens |
+| `SKILL_CATALOG_MAX_TOKENS` | `2000` | Maximum catalog prompt tokens |
+| `KNOWLEDGE_UPLOAD_DIR` | `data/knowledge-uploads` | Persistent owner-partitioned raw upload directory |
+| `KNOWLEDGE_UPLOAD_MAX_BYTES` | `5242880` | Maximum bytes for one UTF-8 MD/TXT/RST upload |
+| `KNOWLEDGE_INGESTION_MAX_ATTEMPTS` | `5` | Durable ingestion attempts before terminal failure |
+| `KNOWLEDGE_INGESTION_STALE_AFTER_SECONDS` | `300` | Lease staleness threshold |
+| `KNOWLEDGE_INGESTION_HEARTBEAT_SECONDS` | `30` | Lease renewal interval |
 
 ---
 

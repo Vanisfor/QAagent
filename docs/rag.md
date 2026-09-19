@@ -204,7 +204,7 @@ flowchart LR
 | `RERANK_CANDIDATES` | `20` | RRF candidates sent to the reranker |
 | `RERANK_TIMEOUT` | `8` | Reranker request timeout before fused-order fallback |
 | `RETRIEVAL_MAX_LOOPS` | `2` | Hard limit for evaluate → rewrite → retrieve rounds |
-| `AGENT_TOOL_CALL_BUDGET` | `2` | Maximum actual tool executions per user turn; retries do not consume extra budget |
+| `AGENT_TOOL_CALL_BUDGET` | `2` | Maximum read-only business-tool executions per user turn; retries and Skill activation do not consume this class budget |
 | `AGENT_RECURSION_LIMIT` | `25` | Final LangGraph safety ceiling after explicit tool guards |
 | `KNOWLEDGE_GRAPH_MAX_CHUNKS` | `20` | Maximum chunks sent during one graph extraction |
 | `CONNECTOR_CREDENTIAL_ENCRYPTION_KEY` | *(empty)* | Separate platform master key for provider tokens |

@@ -6,7 +6,8 @@ import { Modal } from "./components/ui/Modal";
 import type { LLMSettings, LLMSettingsInput } from "./types";
 
 interface ModelSettingsModalProps {
-  open: boolean;
+  open?: boolean;
+  embedded?: boolean;
   userToken: string;
   onClose: () => void;
   onChange: (settings: LLMSettings) => void;
@@ -32,7 +33,7 @@ function formFromSettings(settings: LLMSettings): LLMSettingsInput {
   };
 }
 
-export function ModelSettingsModal({ open, userToken, onClose, onChange }: ModelSettingsModalProps) {
+export function ModelSettingsModal({ open = true, embedded = false, userToken, onClose, onChange }: ModelSettingsModalProps) {
   const [form, setForm] = useState<LLMSettingsInput>(defaultForm);
   const [maskedKey, setMaskedKey] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -82,7 +83,7 @@ export function ModelSettingsModal({ open, userToken, onClose, onChange }: Model
     finally { setBusy(false); }
   }
 
-  return <Modal open={open} title="模型与 API 设置" onClose={onClose}>
+  const content = <>
     <div className="security-note"><ShieldCheck size={18} /><div><strong>密钥由服务器加密保存</strong><p>完整 API Key 不会返回浏览器，也不会写入聊天记录、日志或追踪。</p></div></div>
     <form className="settings-form" onSubmit={save}>
       <label htmlFor="provider">API 供应商<select id="provider" value={form.provider} disabled><option value="deepseek">DeepSeek</option></select></label>
@@ -95,5 +96,6 @@ export function ModelSettingsModal({ open, userToken, onClose, onChange }: Model
       <div className="settings-actions"><button type="button" className="secondary-button" onClick={() => void testConnection()} disabled={busy}>测试连接</button><button className="primary-button" disabled={busy}>{busy ? "处理中…" : "验证并保存"}</button></div>
       {maskedKey && <button type="button" className="danger-button" onClick={() => void removeCredential()} disabled={busy}><Trash2 size={15} />删除模型凭据</button>}
     </form>
-  </Modal>;
+  </>;
+  return embedded ? content : <Modal open={open} title="模型与 API 设置" onClose={onClose}>{content}</Modal>;
 }

@@ -60,6 +60,11 @@ async def knowledge_search(query: str, config: RunnableConfig, top_k: int = 5) -
             user_id,
             requested_spaces=requested_context.space_slugs,
         )
+        if context.space_scope_requested and not context.space_slugs:
+            return (
+                "No accessible internal evidence was found. The explicitly requested knowledge spaces "
+                "are unavailable or unauthorized; do not fall back to other spaces."
+            )
         runtime = await user_llm_settings_service.get_runtime(user_id)
         bundle = await agentic_rag_workflow.run(query, context, runtime, intent="qa", top_k=k, config=config)
         hits = bundle.hits

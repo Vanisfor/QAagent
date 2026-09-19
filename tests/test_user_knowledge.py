@@ -1,0 +1,62 @@
+"""Tests for owner-scoped personal knowledge uploads."""
+
+from pathlib import Path
+
+import pytest
+from fastapi import HTTPException
+from pydantic import ValidationError
+
+from app.schemas.user_knowledge import KnowledgeSpaceCreate
+from app.services.user_knowledge import UserKnowledgeService
+
+
+def test_space_create_contract_rejects_client_identity_and_public_flag() -> None:
+    """Ownership and visibility come only from authenticated server context."""
+    with pytest.raises(ValidationError):
+        KnowledgeSpaceCreate.model_validate({"name": "Mine", "user_id": 9})
+    with pytest.raises(ValidationError):
+        KnowledgeSpaceCreate.model_validate({"name": "Mine", "is_public": True})
+
+
+def test_upload_validation_accepts_supported_utf8_text() -> None:
+    """The v1 upload boundary accepts only the documented text formats."""
+    upload = UserKnowledgeService.validate_upload(
+        filename="notes.md",
+        content_type="text/markdown",
+        data="# Notes\nGrounded fact".encode(),
+        max_bytes=1024,
+    )
+
+    assert upload.suffix == ".md"
+    assert upload.text.startswith("# Notes")
+
+
+@pytest.mark.parametrize(
+    ("filename", "content_type", "data"),
+    [
+        ("notes.pdf", "application/pdf", b"pdf"),
+        ("notes.md", "application/pdf", b"text"),
+        ("notes.txt", "text/plain", b"\xff"),
+        ("notes.rst", "text/plain", b""),
+    ],
+)
+def test_upload_validation_rejects_unsupported_or_invalid_content(
+    filename: str, content_type: str, data: bytes
+) -> None:
+    """Extension, MIME, UTF-8 and non-empty checks all fail closed."""
+    with pytest.raises(HTTPException):
+        UserKnowledgeService.validate_upload(
+            filename=filename,
+            content_type=content_type,
+            data=data,
+            max_bytes=1024,
+        )
+
+
+def test_upload_storage_path_cannot_escape_owner_directory(tmp_path: Path) -> None:
+    """Client filenames never participate in the persisted filesystem path."""
+    path = UserKnowledgeService.storage_path(tmp_path, user_id=7, external_id="abc123", suffix=".md")
+
+    assert path == (tmp_path / "7" / "abc123.md").resolve()
+    assert path.is_relative_to(tmp_path.resolve())
+    assert ".." not in path.parts

@@ -70,6 +70,7 @@ class RetrievalContext(BaseModel):
     organization_ids: tuple[int, ...] = ()
     group_ids: tuple[str, ...] = ()
     space_slugs: tuple[str, ...] = ()
+    space_scope_requested: bool = False
 
     @property
     def principals(self) -> tuple[tuple[str, str], ...]:
@@ -92,4 +93,5 @@ class RetrievalContext(BaseModel):
             organization_ids=organization_ids,
             group_ids=group_ids,
             space_slugs=space_slugs,
+            space_scope_requested=bool(space_slugs),
         )

@@ -10,6 +10,7 @@ from app.core.logging import logger
 from app.repositories.memory_jobs import ClaimedMemoryJob, MemoryJobRepository
 from app.services.database import database_service
 from app.services.memory import memory_service
+from app.services.user_account import user_account_service
 
 
 class MemoryJobLeaseLost(RuntimeError):
@@ -120,6 +121,9 @@ class MemoryJobService:
 
     async def _process_with_heartbeat(self, job: ClaimedMemoryJob) -> None:
         """Process one job while periodically renewing its ownership lease."""
+        preferences = await user_account_service.personalization(int(job.user_id))
+        if not preferences.memory_enabled:
+            return
         heartbeat_seconds = max(
             0.1,
             min(settings.MEMORY_JOB_HEARTBEAT_SECONDS, settings.MEMORY_JOB_STALE_AFTER_SECONDS / 3),

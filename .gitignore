@@ -28,3 +28,8 @@ evals/reports/
 #agent
 .cursor
 CLAUDE.md
+
+#knowledge files
+knowledge/
+docs/superpowers/
+docs/atlas-cloud-logo*.png

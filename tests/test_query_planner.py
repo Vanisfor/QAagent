@@ -70,6 +70,15 @@ def test_planner_failure_uses_bounded_single_query_fallback() -> None:
     assert plan.max_hops == 0
 
 
+def test_planner_cannot_invent_space_when_request_is_unscoped() -> None:
+    """An empty allow-list means all ACL-accessible spaces, not model-chosen slugs."""
+    plan = QueryPlan(intent="qa", queries=["q"], space_slugs=["invented-private"])
+
+    normalized = QueryPlannerService._normalize(plan, "q", [], "qa")
+
+    assert normalized.space_slugs == []
+
+
 def test_query_plan_normalizes_known_json_mode_aliases() -> None:
     """Known DeepSeek aliases map to canonical fields before strict validation."""
     plan = QueryPlan.model_validate(

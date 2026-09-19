@@ -19,13 +19,15 @@ from app.schemas.auth import Token
 from app.utils.sanitization import sanitize_string
 
 
-def create_access_token(subject: str, token_type: str, expires_delta: Optional[timedelta] = None) -> Token:
+def create_access_token(subject: str, token_type: str, expires_delta: Optional[timedelta] = None, *, login_session_id: str | None = None, user_id: int | None = None) -> Token:
     """Create a new access token for a thread.
 
     Args:
         subject: User or session identifier.
         token_type: Explicit token purpose (``user`` or ``session``).
         expires_delta: Optional expiration time delta.
+        login_session_id: Revocable login session that owns this credential.
+        user_id: Authenticated owner for user and conversation credentials.
 
     Returns:
         Token: The generated access token.
@@ -42,12 +44,25 @@ def create_access_token(subject: str, token_type: str, expires_delta: Optional[t
         "iat": datetime.now(UTC),
         "jti": sanitize_string(f"{subject}-{datetime.now(UTC).timestamp()}"),
     }
+    if login_session_id is not None:
+        to_encode["sid"] = login_session_id
+    if user_id is not None:
+        to_encode["uid"] = str(user_id)
 
     encoded_jwt = jwt.encode(to_encode, settings.JWT_SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
 
     logger.info("token_created", token_type=token_type, expires_at=expire.isoformat())
 
     return Token(access_token=encoded_jwt, expires_at=expire)
+
+
+def decode_access_token(token: str, expected_type: str) -> dict | None:
+    """Return verified claims including login binding, never raw credentials in logs."""
+    try:
+        payload = jwt.decode(token, settings.JWT_SECRET_KEY, algorithms=[settings.JWT_ALGORITHM])
+        return payload if payload.get("token_type") == expected_type and payload.get("sub") else None
+    except JWTError:
+        return None
 
 
 def verify_token(token: str, expected_type: str) -> Optional[str]:

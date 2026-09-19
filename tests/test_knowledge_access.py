@@ -3,6 +3,7 @@
 import asyncio
 from typing import Any
 
+from app.schemas.chat import ChatRequest
 from app.core.langgraph.tools.knowledge_search import (
     agentic_rag_workflow,
     knowledge_search,
@@ -28,6 +29,17 @@ def test_retrieval_context_uses_server_metadata() -> None:
     assert context.user_id == "7"
     assert context.principals == (("user", "7"), ("group", "engineering"), ("group", "security"))
     assert context.space_slugs == ("product",)
+    assert context.space_scope_requested is True
+
+
+def test_chat_request_normalizes_requested_space_slugs() -> None:
+    """The client may request bounded spaces but cannot submit authorization data."""
+    request = ChatRequest(
+        messages=[{"role": "user", "content": "question"}],
+        space_slugs=[" private ", "private", "team"],
+    )
+
+    assert request.space_slugs == ["private", "team"]
 
 
 def test_knowledge_search_passes_injected_access_context(monkeypatch) -> None:
@@ -71,3 +83,34 @@ def test_knowledge_search_passes_injected_access_context(monkeypatch) -> None:
     assert captured["intent"] == "qa"
     assert captured["config"]["metadata"]["user_id"] == "42"
     assert "config" not in knowledge_search.args
+
+
+def test_knowledge_search_does_not_fall_back_when_requested_spaces_are_denied(monkeypatch) -> None:
+    """An unauthorized explicit scope must not become an unscoped full search."""
+    called = False
+
+    async def fake_access(user_id: int, *, requested_spaces=()) -> RetrievalContext:
+        return RetrievalContext(
+            user_id=str(user_id),
+            organization_ids=(1,),
+            space_slugs=(),
+            space_scope_requested=True,
+        )
+
+    async def fake_run(*args, **kwargs):
+        nonlocal called
+        called = True
+        raise AssertionError("RAG must not run for a denied explicit space scope")
+
+    monkeypatch.setattr(knowledge_access_service, "context_for_user", fake_access)
+    monkeypatch.setattr(agentic_rag_workflow, "run", fake_run)
+
+    result = asyncio.run(
+        knowledge_search.ainvoke(
+            {"query": "private policy"},
+            config={"metadata": {"user_id": "42", "knowledge_space_slugs": ["denied"]}},
+        )
+    )
+
+    assert called is False
+    assert "No accessible internal evidence" in result

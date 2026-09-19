@@ -3,6 +3,7 @@
 import asyncio
 import json
 import re
+from collections import Counter
 from collections.abc import Mapping
 from typing import (
     Any,
@@ -34,12 +35,16 @@ from app.core.config import (
     Environment,
     settings,
 )
-from app.core.langgraph.tools import tools
+from app.core.langgraph.tool_policy import ToolBudgetClass, get_tool_policy
+from app.core.langgraph.tools import get_tools
 from app.core.langgraph.checkpoints import CheckpointService
 from app.core.langgraph.tool_executor import ToolExecutor
 from app.core.logging import logger
-from app.core.metrics import llm_inference_duration_seconds
-from app.core.prompts import load_system_prompt
+from app.core.metrics import llm_inference_duration_seconds, tool_budget_rejections_total
+from app.core.prompts.assembly import build_system_prompt
+from app.core.skills.registry import skill_registry
+from app.core.skills.tools import parse_activation_receipt
+from app.services.user_account import user_account_service
 from app.schemas import (
     ChatInputMessage,
     ChatOutputMessage,
@@ -105,6 +110,26 @@ def _executed_tool_count(messages: list[BaseMessage]) -> int:
     )
 
 
+def _executed_tool_counts(messages: list[BaseMessage]) -> Counter[ToolBudgetClass]:
+    """Count actual executions by independent policy budget class."""
+    counts: Counter[ToolBudgetClass] = Counter()
+    for message in messages:
+        if isinstance(message, ToolMessage) and not message.additional_kwargs.get(_TOOL_GUARD_KEY):
+            counts[get_tool_policy(message.name or "").budget_class] += 1
+    return counts
+
+
+def _budget_limit(budget_class: ToolBudgetClass) -> int:
+    """Resolve one class limit from validated settings."""
+    if budget_class == ToolBudgetClass.CONTROL:
+        return settings.AGENT_CONTROL_TOOL_CALL_BUDGET
+    if budget_class == ToolBudgetClass.READ_ONLY:
+        return settings.AGENT_TOOL_CALL_BUDGET
+    if budget_class == ToolBudgetClass.INTERACTIVE:
+        return settings.AGENT_INTERACTIVE_TOOL_CALL_BUDGET
+    return settings.AGENT_SIDE_EFFECT_TOOL_CALL_BUDGET
+
+
 def _final_answer_reason(messages: list[Any]) -> str | None:
     """Return why the next chat node must generate a final answer without tools."""
     current_turn = _current_turn_messages(messages)
@@ -120,9 +145,31 @@ def _final_answer_reason(messages: list[Any]) -> str | None:
         isinstance(message, ToolMessage) and message.additional_kwargs.get(_TOOL_GUARD_KEY) for message in current_turn
     ):
         return "tool_guard_triggered"
-    if _executed_tool_count(current_turn) >= settings.AGENT_TOOL_CALL_BUDGET:
+    if _executed_tool_count(current_turn) >= settings.AGENT_TOTAL_TOOL_CALL_BUDGET:
         return "tool_budget_exhausted"
     return None
+
+
+def _trusted_skill_instructions(messages: list[BaseMessage]) -> str:
+    """Resolve only a server-generated activation ToolMessage from this user turn."""
+    for message in reversed(messages):
+        if not isinstance(message, ToolMessage) or message.name != "activate_skill":
+            continue
+        if message.additional_kwargs.get(_TOOL_GUARD_KEY):
+            return ""
+        try:
+            activation = parse_activation_receipt(str(message.content))
+            return skill_registry.load_instructions(activation)
+        except (KeyError, OSError, UnicodeError, ValueError) as error:
+            logger.warning("skill_activation_receipt_rejected", error_type=type(error).__name__)
+            return ""
+    return ""
+
+
+def _memory_messages(messages: list[BaseMessage]) -> list[dict[str, Any]]:
+    """Keep tool/control payloads out of long-term user-memory extraction."""
+    converted = cast(list[dict[str, Any]], convert_to_openai_messages(messages))
+    return [message for message in converted if message.get("role") in {"user", "assistant"} and message.get("content")]
 
 
 def _guarded_tool_message(tool_call: dict[str, Any], *, reason: str) -> ToolMessage:
@@ -152,6 +199,12 @@ def _tool_result_summary(name: str, content: str) -> str:
         return "网页搜索完成"
     if name == "ask_human":
         return "等待用户确认"
+    if name == "activate_skill":
+        try:
+            activation = parse_activation_receipt(content)
+            return f"已加载 Skill：{activation.name}"
+        except ValueError:
+            return "Skill 加载失败"
     snippet = re.sub(r"\s+", " ", content).strip()
     return (snippet[:120] + ("…" if len(snippet) > 120 else "")) if snippet else "完成"
 
@@ -165,7 +218,7 @@ class LangGraphAgent:
 
     def __init__(self):
         """Initialize the LangGraph Agent with necessary components."""
-        self.tools_by_name = {tool.name: tool for tool in tools}
+        self.tools_by_name = {tool.name: tool for tool in get_tools()}
         self.tool_executor = ToolExecutor()
         self.checkpoints = CheckpointService()
         self._graph: Optional[CompiledStateGraph] = None
@@ -201,8 +254,10 @@ class LangGraphAgent:
         current_turn = _current_turn_messages(state.messages)
         final_answer_reason = _final_answer_reason(current_turn)
         request_llm_service = LLMService(runtime)
+        request_tools = get_tools()
+        self.tools_by_name = {tool.name: tool for tool in request_tools}
         if final_answer_reason is None:
-            request_llm_service.bind_tools(tools)
+            request_llm_service.bind_tools(request_tools)
         else:
             logger.info(
                 "agent_forcing_final_answer",
@@ -210,12 +265,20 @@ class LangGraphAgent:
                 tool_calls_used=_executed_tool_count(current_turn),
             )
         model_name = runtime.model
-        username = config.get("metadata", {}).get("username")
         reasoning_effort = config.get("metadata", {}).get("reasoning_effort", "off")
         thread_id = config.get("configurable", {}).get("thread_id")
-        system_prompt = load_system_prompt(username=username, long_term_memory=state.long_term_memory)
-        if final_answer_reason is not None:
-            system_prompt = f"{system_prompt}\n\n# Current turn tool boundary\n{_FINAL_ANSWER_INSTRUCTION}"
+        user = await database_service.get_user(int(user_id))
+        if user is None:
+            raise RuntimeError("authenticated user not found")
+        profile, preferences = await asyncio.gather(user_account_service.profile(user), user_account_service.personalization(user.id))
+        system_prompt = build_system_prompt(
+            profile,
+            preferences,
+            state.long_term_memory,
+            final_answer_instruction=_FINAL_ANSWER_INSTRUCTION if final_answer_reason is not None else None,
+            skills_prompt=skill_registry.build_skills_prompt(),
+            trusted_skill=_trusted_skill_instructions(current_turn),
+        )
 
         # Prepare messages with system prompt
         messages = prepare_messages(state.messages, system_prompt)
@@ -273,7 +336,9 @@ class LangGraphAgent:
         tool_calls = state.messages[-1].tool_calls
         current_turn = _current_turn_messages(state.messages[:-1])
         seen = _prior_tool_fingerprints(current_turn)
-        remaining = max(0, settings.AGENT_TOOL_CALL_BUDGET - _executed_tool_count(current_turn))
+        existing_counts = _executed_tool_counts(current_turn)
+        pending_counts: Counter[ToolBudgetClass] = Counter()
+        existing_total = _executed_tool_count(current_turn)
         outputs: list[ToolMessage | None] = [None] * len(tool_calls)
         pending_calls: list[dict[str, Any]] = []
         pending_positions: list[int] = []
@@ -286,16 +351,23 @@ class LangGraphAgent:
                 outputs[index] = _guarded_tool_message(tool_call, reason="duplicate")
                 continue
             seen.add(fingerprint)
-            if len(pending_calls) >= remaining:
+            budget_class = get_tool_policy(tool_name).budget_class
+            class_exhausted = existing_counts[budget_class] + pending_counts[budget_class] >= _budget_limit(
+                budget_class
+            )
+            total_exhausted = existing_total + len(pending_calls) >= settings.AGENT_TOTAL_TOOL_CALL_BUDGET
+            if class_exhausted or total_exhausted:
                 logger.warning(
                     "tool_call_budget_exhausted",
                     tool_name=tool_name,
-                    budget=settings.AGENT_TOOL_CALL_BUDGET,
+                    budget_class=budget_class.value,
                 )
+                tool_budget_rejections_total.labels(budget_class=budget_class.value).inc()
                 outputs[index] = _guarded_tool_message(tool_call, reason="budget_exhausted")
                 continue
             pending_calls.append(tool_call)
             pending_positions.append(index)
+            pending_counts[budget_class] += 1
 
         if pending_calls:
             executed_outputs = await self.tool_executor.execute_many(pending_calls, self.tools_by_name, config)
@@ -371,6 +443,7 @@ class LangGraphAgent:
         user_id: Optional[str] = None,
         username: Optional[str] = None,
         reasoning_effort: str = "off",
+        knowledge_space_slugs: list[str] | None = None,
     ) -> list[ChatOutputMessage]:
         """Get a response from the LLM.
 
@@ -380,6 +453,7 @@ class LangGraphAgent:
             user_id (Optional[str]): The user ID for the conversation.
             username (Optional[str]): The display name of the user.
             reasoning_effort: DeepSeek reasoning mode for this request.
+            knowledge_space_slugs: Optional client scope, re-authorized by the server-side retrieval tool.
 
         Returns:
             list[ChatOutputMessage]: The response from the LLM.
@@ -395,15 +469,14 @@ class LangGraphAgent:
                 "environment": settings.ENVIRONMENT.value,
                 "debug": settings.DEBUG,
                 "reasoning_effort": reasoning_effort,
+                "knowledge_space_slugs": list(knowledge_space_slugs or ()),
             },
         }
 
         try:
-            # Run state check and memory search concurrently to save 200-500ms
-            state, relevant_memory = await asyncio.gather(
-                graph.aget_state(config),
-                memory_service.search(user_id, messages[-1].content),
-            )
+            preferences = await user_account_service.personalization(int(user_id)) if user_id is not None else None
+            state = await graph.aget_state(config)
+            relevant_memory = await memory_service.search(user_id, messages[-1].content) if preferences and preferences.memory_enabled else ""
 
             if state.next:
                 logger.info("resuming_interrupted_graph", session_id=session_id, next_nodes=state.next)
@@ -425,8 +498,9 @@ class LangGraphAgent:
                 logger.info("graph_interrupted", session_id=session_id, interrupt_value=str(interrupt_value))
                 return [ChatOutputMessage(role="assistant", content=str(interrupt_value))]
 
-            openai_msgs = cast(list[dict], convert_to_openai_messages(response["messages"]))
-            await memory_job_service.enqueue(user_id, openai_msgs, config.get("metadata"))
+            openai_msgs = _memory_messages(response["messages"])
+            if preferences and preferences.memory_enabled:
+                await memory_job_service.enqueue(user_id, openai_msgs, config.get("metadata"))
             return self.__process_messages(response["messages"])
         except GraphInterrupt:
             state = await graph.aget_state(config)
@@ -444,6 +518,7 @@ class LangGraphAgent:
         user_id: Optional[str] = None,
         username: Optional[str] = None,
         reasoning_effort: str = "off",
+        knowledge_space_slugs: list[str] | None = None,
     ) -> AsyncGenerator[dict[str, Any], None]:
         """Get a stream response from the LLM.
 
@@ -453,6 +528,7 @@ class LangGraphAgent:
             user_id (Optional[str]): The user ID for the conversation.
             username (Optional[str]): The display name of the user.
             reasoning_effort: DeepSeek reasoning mode for this request.
+            knowledge_space_slugs: Optional client scope, re-authorized by the server-side retrieval tool.
 
         Yields:
             dict[str, Any]: Structured streaming events.
@@ -467,6 +543,7 @@ class LangGraphAgent:
                 "environment": settings.ENVIRONMENT.value,
                 "debug": settings.DEBUG,
                 "reasoning_effort": reasoning_effort,
+                "knowledge_space_slugs": list(knowledge_space_slugs or ()),
             },
         }
         graph = await self._get_graph()
@@ -477,10 +554,9 @@ class LangGraphAgent:
             effective_effort = reasoning_effort if runtime and runtime.thinking_enabled else "off"
             yield {"type": "meta", "data": {"model": model_name, "reasoning_effort": effective_effort}}
             yield {"type": "stage", "data": {"stage": "memory", "status": "started"}}
-            state, relevant_memory = await asyncio.gather(
-                graph.aget_state(config),
-                memory_service.search(user_id, messages[-1].content),
-            )
+            preferences = await user_account_service.personalization(int(user_id)) if user_id is not None else None
+            state = await graph.aget_state(config)
+            relevant_memory = await memory_service.search(user_id, messages[-1].content) if preferences and preferences.memory_enabled else ""
             memory_count = (
                 len([line for line in relevant_memory.splitlines() if line.startswith("* ")]) if relevant_memory else 0
             )
@@ -552,8 +628,9 @@ class LangGraphAgent:
                 logger.info("graph_interrupted_stream", session_id=session_id, interrupt_value=str(interrupt_value))
                 yield {"type": "answer_delta", "content": str(interrupt_value), "data": {}}
             elif state.values and "messages" in state.values:
-                openai_msgs = cast(list[dict], convert_to_openai_messages(state.values["messages"]))
-                await memory_job_service.enqueue(user_id, openai_msgs, config.get("metadata"))
+                openai_msgs = _memory_messages(state.values["messages"])
+                if preferences and preferences.memory_enabled:
+                    await memory_job_service.enqueue(user_id, openai_msgs, config.get("metadata"))
         except GraphInterrupt:
             state = await graph.aget_state(config)
             interrupt_value = state.tasks[0].interrupts[0].value if state.tasks else "Waiting for input."

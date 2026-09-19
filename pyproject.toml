@@ -45,6 +45,7 @@ dependencies = [
     "asgi-correlation-id>=4.3.4",
     "alembic>=1.18.4",
     "httpx>=0.28.1",
+    "pillow>=11.0.0",
 ]
 
 [project.optional-dependencies]

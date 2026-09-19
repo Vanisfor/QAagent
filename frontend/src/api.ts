@@ -1,4 +1,5 @@
-import type { HistoryMessage, LLMSettings, LLMSettingsInput, ReasoningEffort, SessionSummary, StreamEvent } from "./types";
+import { apiFetch, rememberConversation } from "./auth/transport";
+import type { HistoryMessage, KnowledgeDocument, KnowledgeIngestionJob, KnowledgeSpace, LLMSettings, LLMSettingsInput, ReasoningEffort, SessionSummary, StreamEvent } from "./types";
 
 const API = "/api/v1";
 
@@ -80,13 +81,13 @@ async function parseError(response: Response): Promise<ApiError> {
 
 export async function login(email: string, password: string): Promise<string> {
   const body = new URLSearchParams({ email, password, grant_type: "password" });
-  const response = await fetch(`${API}/auth/login`, { method: "POST", body });
+  const response = await apiFetch(`${API}/auth/login`, { method: "POST", body });
   if (!response.ok) throw await parseError(response);
   return (await response.json()).access_token;
 }
 
 export async function register(email: string, password: string, username: string): Promise<string> {
-  const response = await fetch(`${API}/auth/register`, {
+  const response = await apiFetch(`${API}/auth/register`, {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ email, password, username }),
   });
@@ -95,20 +96,22 @@ export async function register(email: string, password: string, username: string
 }
 
 export async function createSession(userToken: string): Promise<SessionSummary> {
-  const response = await fetch(`${API}/auth/session`, {
+  const response = await apiFetch(`${API}/auth/session`, {
     method: "POST", headers: { Authorization: `Bearer ${userToken}` },
   });
   if (!response.ok) throw await parseError(response);
   const data = await response.json();
+  rememberConversation(data.session_id, data.token.access_token);
   return { sessionId: data.session_id, name: data.name ?? "", token: data.token.access_token };
 }
 
 export async function listSessions(userToken: string): Promise<SessionSummary[]> {
-  const response = await fetch(`${API}/auth/sessions`, {
+  const response = await apiFetch(`${API}/auth/sessions`, {
     headers: { Authorization: `Bearer ${userToken}` },
   });
   if (!response.ok) throw await parseError(response);
   const data = await response.json() as Array<{ session_id: string; name: string; token: { access_token: string } }>;
+  for (const session of data) rememberConversation(session.session_id, session.token.access_token);
   return data.map((session) => ({
     sessionId: session.session_id,
     name: session.name ?? "",
@@ -117,18 +120,19 @@ export async function listSessions(userToken: string): Promise<SessionSummary[]>
 }
 
 export async function renameSession(sessionToken: string, sessionId: string, name: string): Promise<SessionSummary> {
-  const response = await fetch(`${API}/auth/session/${sessionId}/name`, {
+  const response = await apiFetch(`${API}/auth/session/${sessionId}/name`, {
     method: "PATCH",
     headers: { Authorization: `Bearer ${sessionToken}` },
     body: new URLSearchParams({ name }),
   });
   if (!response.ok) throw await parseError(response);
   const data = await response.json();
+  rememberConversation(data.session_id, data.token.access_token);
   return { sessionId: data.session_id, name: data.name ?? "", token: data.token.access_token };
 }
 
 export async function deleteSession(sessionToken: string, sessionId: string): Promise<void> {
-  const response = await fetch(`${API}/auth/session/${sessionId}`, {
+  const response = await apiFetch(`${API}/auth/session/${sessionId}`, {
     method: "DELETE",
     headers: { Authorization: `Bearer ${sessionToken}` },
   });
@@ -136,7 +140,7 @@ export async function deleteSession(sessionToken: string, sessionId: string): Pr
 }
 
 export async function getSessionMessages(sessionToken: string): Promise<HistoryMessage[]> {
-  const response = await fetch(`${API}/chatbot/messages`, {
+  const response = await apiFetch(`${API}/chatbot/messages`, {
     headers: { Authorization: `Bearer ${sessionToken}` },
   });
   if (!response.ok) throw await parseError(response);
@@ -145,7 +149,7 @@ export async function getSessionMessages(sessionToken: string): Promise<HistoryM
 }
 
 export async function getLLMSettings(userToken: string): Promise<LLMSettings> {
-  const response = await fetch(`${API}/users/me/settings/llm`, {
+  const response = await apiFetch(`${API}/users/me/settings/llm`, {
     headers: { Authorization: `Bearer ${userToken}` },
   });
   if (!response.ok) throw await parseError(response);
@@ -153,7 +157,7 @@ export async function getLLMSettings(userToken: string): Promise<LLMSettings> {
 }
 
 export async function testLLMSettings(userToken: string, payload: LLMSettingsInput): Promise<void> {
-  const response = await fetch(`${API}/users/me/settings/llm/test`, {
+  const response = await apiFetch(`${API}/users/me/settings/llm/test`, {
     method: "POST",
     headers: { Authorization: `Bearer ${userToken}`, "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -162,7 +166,7 @@ export async function testLLMSettings(userToken: string, payload: LLMSettingsInp
 }
 
 export async function saveLLMSettings(userToken: string, payload: LLMSettingsInput): Promise<LLMSettings> {
-  const response = await fetch(`${API}/users/me/settings/llm`, {
+  const response = await apiFetch(`${API}/users/me/settings/llm`, {
     method: "PUT",
     headers: { Authorization: `Bearer ${userToken}`, "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -172,7 +176,7 @@ export async function saveLLMSettings(userToken: string, payload: LLMSettingsInp
 }
 
 export async function deleteLLMSettings(userToken: string): Promise<void> {
-  const response = await fetch(`${API}/users/me/settings/llm`, {
+  const response = await apiFetch(`${API}/users/me/settings/llm`, {
     method: "DELETE",
     headers: { Authorization: `Bearer ${userToken}` },
   });
@@ -185,11 +189,12 @@ export async function streamChat(
   effort: ReasoningEffort,
   onEvent: (event: StreamEvent) => void,
   signal: AbortSignal,
+  spaceSlugs: string[] = [],
 ): Promise<void> {
-  const response = await fetch(`${API}/chatbot/chat/stream`, {
+  const response = await apiFetch(`${API}/chatbot/chat/stream`, {
     method: "POST",
     headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ messages: [{ role: "user", content: question }], reasoning_effort: effort }),
+    body: JSON.stringify({ messages: [{ role: "user", content: question }], reasoning_effort: effort, space_slugs: spaceSlugs }),
     signal,
   });
   if (!response.ok || !response.body) throw await parseError(response);
@@ -207,4 +212,47 @@ export async function streamChat(
       if (line) onEvent(JSON.parse(line.slice(6)) as StreamEvent);
     }
   }
+}
+
+async function userKnowledgeRequest<T>(token: string, path: string, init?: RequestInit): Promise<T> {
+  const headers = new Headers(init?.headers);
+  headers.set("Authorization", `Bearer ${token}`);
+  if (init?.body && !(init.body instanceof FormData)) headers.set("Content-Type", "application/json");
+  const response = await apiFetch(`${API}/users/me${path}`, { ...init, headers });
+  if (!response.ok) throw await parseError(response);
+  return response.status === 204 ? undefined as T : response.json() as Promise<T>;
+}
+
+export function listKnowledgeSpaces(token: string): Promise<KnowledgeSpace[]> {
+  return userKnowledgeRequest(token, "/knowledge-spaces");
+}
+
+export function createKnowledgeSpace(token: string, name: string): Promise<KnowledgeSpace> {
+  return userKnowledgeRequest(token, "/knowledge-spaces", {
+    method: "POST",
+    body: JSON.stringify({ name }),
+  });
+}
+
+export function listKnowledgeDocuments(token: string, spaceSlug: string): Promise<KnowledgeDocument[]> {
+  return userKnowledgeRequest(token, `/knowledge-spaces/${encodeURIComponent(spaceSlug)}/documents`);
+}
+
+export function uploadKnowledgeDocument(token: string, spaceSlug: string, file: File): Promise<{ job: KnowledgeIngestionJob }> {
+  const body = new FormData();
+  body.append("file", file);
+  return userKnowledgeRequest(token, `/knowledge-spaces/${encodeURIComponent(spaceSlug)}/documents`, {
+    method: "POST",
+    body,
+  });
+}
+
+export function getKnowledgeIngestionJob(token: string, jobId: number): Promise<KnowledgeIngestionJob> {
+  return userKnowledgeRequest(token, `/knowledge-ingestion-jobs/${jobId}`);
+}
+
+export function deleteKnowledgeDocument(token: string, spaceSlug: string, documentId: number): Promise<void> {
+  return userKnowledgeRequest(token, `/knowledge-spaces/${encodeURIComponent(spaceSlug)}/documents/${documentId}`, {
+    method: "DELETE",
+  });
 }

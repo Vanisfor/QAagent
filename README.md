@@ -186,6 +186,12 @@ powershell -ExecutionPolicy Bypass -File .\start.ps1
 
 前端源码必须由 Vite 开发服务器加载，不能直接双击 `frontend/index.html`。Vite 会把 `/api` 请求代理到 `http://127.0.0.1:8001`。
 
+核心业务使用 `/login`、`/chat`、`/chat/:sessionId` 路由，设置保留弹窗交互。路由、浏览器测试和生产环境刷新回退配置见 [前端说明](frontend/README.md)。
+
+Agent 启动时会从 `SKILL_ROOTS`（默认 `skills`）验证部署级 Skill catalog。`activate_skill` 只返回 digest 回执，正文由服务端验证后加入可信系统段，不进入工具输出或长期记忆。详见 [Agent Skills](docs/skills.md)。
+
+登录用户可以创建私有知识空间并上传 UTF-8 的 Markdown、TXT 或 RST 文档。上传进入 lease-owned 持久化 ingestion 队列；聊天可以选择知识空间，但服务端仍会重新计算用户、组织和组 ACL。
+
 ## 五、导入文档并跑通 RAG
 
 导入脚本目前支持 `.md`、`.txt` 和 `.rst`。先在项目根目录安装本机 Python 依赖：

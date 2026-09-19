@@ -84,6 +84,18 @@ class ChatRequest(BaseModel):
         default="off",
         description="DeepSeek reasoning mode for this request",
     )
+    space_slugs: List[str] = Field(
+        default_factory=list,
+        max_length=10,
+        description="Optional knowledge-space scope; authorization is resolved by the server",
+    )
+
+    @field_validator("space_slugs")
+    @classmethod
+    def normalize_space_slugs(cls, values: List[str]) -> List[str]:
+        """Strip empty duplicates without accepting identity or ACL claims."""
+        normalized = [value.strip().lower() for value in values if value.strip()]
+        return list(dict.fromkeys(normalized))
 
 
 class ChatResponse(BaseResponse):

@@ -104,6 +104,7 @@ async def chat(
                 user_id=str(session.user_id),
                 username=session.username,
                 reasoning_effort=chat_request.reasoning_effort,
+                knowledge_space_slugs=chat_request.space_slugs,
             )
 
         logger.info("chat_request_processed", session_id=session.id)
@@ -180,6 +181,7 @@ async def chat_stream(
                                 user_id=str(session.user_id),
                                 username=session.username,
                                 reasoning_effort=chat_request.reasoning_effort,
+                                knowledge_space_slugs=chat_request.space_slugs,
                             ):
                                 if event["type"] in ("reasoning_delta", "answer_delta") and not first_token_seen:
                                     stream_span.set_attribute(

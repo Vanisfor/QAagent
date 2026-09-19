@@ -61,6 +61,7 @@ class ToolExecutor:
                         "tool.execute",
                         tool_name=tool_name,
                         tool_idempotency=policy.idempotency.value,
+                        tool_budget_class=policy.budget_class.value,
                     ) as span:
                         span.set_attribute("attempt", attempt.retry_state.attempt_number)
                         if policy.timeout_seconds is None:

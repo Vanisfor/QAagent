@@ -88,7 +88,7 @@ class QueryPlannerService:
             spaces = [space for space in dict.fromkeys(plan.space_slugs) if space in allowed_spaces]
             spaces = spaces or allowed_spaces
         else:
-            spaces = list(dict.fromkeys(plan.space_slugs))[:10]
+            spaces = []
         use_graph = plan.use_graph and bool(entities)
         return plan.model_copy(
             update={

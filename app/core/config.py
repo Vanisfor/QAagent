@@ -168,7 +168,15 @@ class Settings:
         )
         self.MAX_LLM_CALL_RETRIES = int(os.getenv("MAX_LLM_CALL_RETRIES", "3"))
         self.LLM_TOTAL_TIMEOUT = int(os.getenv("LLM_TOTAL_TIMEOUT", "60"))
-        self.AGENT_TOOL_CALL_BUDGET = max(1, int(os.getenv("AGENT_TOOL_CALL_BUDGET", "1")))
+        self.AGENT_TOOL_CALL_BUDGET = max(1, int(os.getenv("AGENT_TOOL_CALL_BUDGET", "2")))
+        self.AGENT_CONTROL_TOOL_CALL_BUDGET = max(1, int(os.getenv("AGENT_CONTROL_TOOL_CALL_BUDGET", "1")))
+        self.AGENT_INTERACTIVE_TOOL_CALL_BUDGET = max(
+            1, int(os.getenv("AGENT_INTERACTIVE_TOOL_CALL_BUDGET", "1"))
+        )
+        self.AGENT_SIDE_EFFECT_TOOL_CALL_BUDGET = max(
+            1, int(os.getenv("AGENT_SIDE_EFFECT_TOOL_CALL_BUDGET", "1"))
+        )
+        self.AGENT_TOTAL_TOOL_CALL_BUDGET = max(1, int(os.getenv("AGENT_TOTAL_TOOL_CALL_BUDGET", "3")))
         self.AGENT_RECURSION_LIMIT = max(4, int(os.getenv("AGENT_RECURSION_LIMIT", "25")))
         self.USER_SETTINGS_ENCRYPTION_KEY = os.getenv("USER_SETTINGS_ENCRYPTION_KEY", "")
         self.CONNECTOR_CREDENTIAL_ENCRYPTION_KEY = os.getenv("CONNECTOR_CREDENTIAL_ENCRYPTION_KEY", "")
@@ -189,6 +197,19 @@ class Settings:
         self.KNOWLEDGE_SYNC_WORKER_ENABLED = os.getenv("KNOWLEDGE_SYNC_WORKER_ENABLED", "false").lower() == "true"
         self.KNOWLEDGE_SYNC_POLL_SECONDS = float(os.getenv("KNOWLEDGE_SYNC_POLL_SECONDS", "5"))
         self.KNOWLEDGE_SYNC_SHUTDOWN_TIMEOUT = float(os.getenv("KNOWLEDGE_SYNC_SHUTDOWN_TIMEOUT", "15"))
+        self.KNOWLEDGE_UPLOAD_DIR = Path(os.getenv("KNOWLEDGE_UPLOAD_DIR", "data/knowledge-uploads"))
+        self.KNOWLEDGE_UPLOAD_MAX_BYTES = max(1, int(os.getenv("KNOWLEDGE_UPLOAD_MAX_BYTES", str(5 * 1024 * 1024))))
+        self.KNOWLEDGE_INGESTION_POLL_SECONDS = float(os.getenv("KNOWLEDGE_INGESTION_POLL_SECONDS", "1"))
+        self.KNOWLEDGE_INGESTION_MAX_ATTEMPTS = max(1, int(os.getenv("KNOWLEDGE_INGESTION_MAX_ATTEMPTS", "5")))
+        self.KNOWLEDGE_INGESTION_STALE_AFTER_SECONDS = max(
+            1, int(os.getenv("KNOWLEDGE_INGESTION_STALE_AFTER_SECONDS", "300"))
+        )
+        self.KNOWLEDGE_INGESTION_HEARTBEAT_SECONDS = max(
+            0.1, float(os.getenv("KNOWLEDGE_INGESTION_HEARTBEAT_SECONDS", "30"))
+        )
+        self.KNOWLEDGE_INGESTION_SHUTDOWN_TIMEOUT = float(
+            os.getenv("KNOWLEDGE_INGESTION_SHUTDOWN_TIMEOUT", "15")
+        )
 
         # Knowledge Base / RAG Configuration (SiliconFlow free embeddings by default)
         self.SILICONFLOW_API_KEY = os.getenv("SILICONFLOW_API_KEY", "")
@@ -233,6 +254,16 @@ class Settings:
         self.JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "")
         self.JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
         self.JWT_ACCESS_TOKEN_EXPIRE_DAYS = int(os.getenv("JWT_ACCESS_TOKEN_EXPIRE_DAYS", "30"))
+        self.JWT_ACCESS_TOKEN_EXPIRE_MINUTES = max(1, int(os.getenv("JWT_ACCESS_TOKEN_EXPIRE_MINUTES", "30")))
+        self.JWT_REFRESH_TOKEN_EXPIRE_DAYS = max(1, int(os.getenv("JWT_REFRESH_TOKEN_EXPIRE_DAYS", "30")))
+        self.AUTH_COOKIE_SECURE = os.getenv("AUTH_COOKIE_SECURE", "true" if self.ENVIRONMENT == Environment.PRODUCTION else "false").lower() == "true"
+        self.USER_MEDIA_DIR = Path(os.getenv("USER_MEDIA_DIR", "data/user-media"))
+        self.SKILL_ROOTS = parse_list_from_env("SKILL_ROOTS", ["skills"])
+        self.REQUIRED_SKILLS = parse_list_from_env("REQUIRED_SKILLS", [])
+        self.SKILL_MAX_METADATA_BYTES = max(256, int(os.getenv("SKILL_MAX_METADATA_BYTES", str(64 * 1024))))
+        self.SKILL_MAX_FILE_BYTES = max(1024, int(os.getenv("SKILL_MAX_FILE_BYTES", str(512 * 1024))))
+        self.SKILL_MAX_BODY_TOKENS = max(1, int(os.getenv("SKILL_MAX_BODY_TOKENS", "4000")))
+        self.SKILL_CATALOG_MAX_TOKENS = max(1, int(os.getenv("SKILL_CATALOG_MAX_TOKENS", "2000")))
 
         # Logging Configuration
         self.LOG_DIR = Path(os.getenv("LOG_DIR", "logs"))
@@ -279,6 +310,7 @@ class Settings:
             "user_settings_test": ["5 per minute"],
             "research": ["5 per minute"],
             "wiki": ["5 per minute"],
+            "knowledge_upload": ["10 per hour"],
         }
 
         # Update rate limit endpoints from environment variables
@@ -304,6 +336,8 @@ class Settings:
         """Reject placeholder or weak secrets in production."""
         if self.ENVIRONMENT != Environment.PRODUCTION:
             return
+        if "*" in self.ALLOWED_ORIGINS:
+            raise RuntimeError("production ALLOWED_ORIGINS must enumerate trusted browser origins")
         invalid_markers = ("your-", "replace-", "change-me", "mypassword", "supersecret")
         secrets = {
             "JWT_SECRET_KEY": self.JWT_SECRET_KEY,

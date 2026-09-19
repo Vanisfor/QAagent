@@ -18,6 +18,20 @@
 .auth-submit { justify-content: center; margin-top: var(--space-2); }
 
 /* ---------- Settings modal form ---------- */
+.knowledge-panel { display: grid; gap: var(--space-4); }
+.knowledge-create, .knowledge-toolbar { display: flex; align-items: center; gap: var(--space-2); }
+.knowledge-create input { flex: 1; }
+.knowledge-layout { display: grid; grid-template-columns: minmax(12rem, .8fr) minmax(16rem, 1.2fr); gap: var(--space-4); min-height: 18rem; }
+.knowledge-spaces, .knowledge-documents { display: grid; align-content: start; gap: var(--space-2); }
+.knowledge-space { display: grid; gap: var(--space-1); padding: var(--space-2); border: 1px solid var(--border); border-radius: var(--radius-md); }
+.knowledge-space.active { border-color: var(--accent); background: var(--surface-raised); }
+.knowledge-space > button { display: grid; gap: .2rem; padding: 0; border: 0; background: transparent; color: inherit; text-align: left; }
+.knowledge-space span, .knowledge-document span { color: var(--muted); font-size: var(--text-xs); }
+.knowledge-space label { display: flex; align-items: center; gap: var(--space-2); font-size: var(--text-xs); }
+.knowledge-toolbar { justify-content: space-between; }
+.knowledge-document { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: var(--space-2); padding: var(--space-2); border-bottom: 1px solid var(--border); }
+.knowledge-document > div { display: grid; gap: .2rem; min-width: 0; }
+@media (max-width: 700px) { .knowledge-layout { grid-template-columns: 1fr; } }
 .settings-form { display: grid; gap: var(--space-4); }
 .settings-form label, .settings-grid label { display: grid; gap: var(--space-2); color: var(--muted-foreground); font-size: var(--text-xs); }
 .settings-form input, .settings-form select { width: 100%; min-height: 2.5rem; padding: .6rem .7rem; border: 1px solid var(--border); border-radius: var(--radius-sm); outline: 0; background: var(--background-subtle); color: var(--foreground); }

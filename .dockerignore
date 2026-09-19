@@ -53,6 +53,8 @@ docker-compose.yml
 docs/
 README.md
 *.md
+!app/core/prompts/*.md
+!skills/**/SKILL.md
 
 # Build artifacts
 *.pyc

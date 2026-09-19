@@ -10,13 +10,14 @@ import app.core.langgraph.graph as graph_module
 from app.core.config import settings
 from app.core.langgraph.graph import LangGraphAgent, _final_answer_reason
 from app.schemas.graph import GraphState
+from app.schemas.user_account import ProfileResponse, Personalization
 
 
-def _tool_call(call_id: str, query: str) -> dict:
+def _tool_call(call_id: str, query: str, *, name: str = "knowledge_search") -> dict:
     """Build one valid LangChain tool-call payload."""
     return {
-        "name": "knowledge_search",
-        "args": {"query": query},
+        "name": name,
+        "args": {"name": query} if name == "activate_skill" else {"query": query},
         "id": call_id,
         "type": "tool_call",
     }
@@ -98,6 +99,32 @@ def test_tool_budget_caps_actual_executions(monkeypatch) -> None:
     assert _final_answer_reason([*state.messages, *outputs]) == "tool_guard_triggered"
 
 
+def test_skill_activation_does_not_consume_read_only_tool_budget(monkeypatch) -> None:
+    """A control-plane activation can be followed by an ordinary retrieval call."""
+    monkeypatch.setattr(settings, "AGENT_TOOL_CALL_BUDGET", 1)
+    monkeypatch.setattr(settings, "AGENT_CONTROL_TOOL_CALL_BUDGET", 1)
+    monkeypatch.setattr(settings, "AGENT_TOTAL_TOOL_CALL_BUDGET", 2)
+    executor = RecordingToolExecutor()
+    agent = LangGraphAgent()
+    agent.tool_executor = executor  # type: ignore[assignment]
+    state = GraphState(
+        messages=[
+            HumanMessage(content="question"),
+            AIMessage(content="", tool_calls=[_tool_call("skill-1", "grounded", name="activate_skill")]),
+            ToolMessage(
+                content='{"type":"skill_activation","name":"grounded","digest":"abc","version":"1"}',
+                name="activate_skill",
+                tool_call_id="skill-1",
+            ),
+            AIMessage(content="", tool_calls=[_tool_call("search-1", "question")]),
+        ]
+    )
+
+    asyncio.run(agent._tool_call(state, {}))
+
+    assert [call["id"] for call in executor.calls] == ["search-1"]
+
+
 def test_chat_uses_unbound_model_after_successful_knowledge_result(monkeypatch) -> None:
     """The node following successful retrieval must generate an answer without tools."""
 
@@ -126,6 +153,19 @@ def test_chat_uses_unbound_model_after_successful_knowledge_result(monkeypatch) 
 
     monkeypatch.setattr(graph_module, "LLMService", RecordingLLMService)
     monkeypatch.setattr(graph_module.user_llm_settings_service, "get_runtime", fake_runtime)
+
+    async def fake_user(user_id):
+        return SimpleNamespace(id=user_id)
+
+    async def fake_profile(user):
+        return ProfileResponse(display_name="Test User")
+
+    async def fake_personalization(user_id):
+        return Personalization()
+
+    monkeypatch.setattr(graph_module.database_service, "get_user", fake_user)
+    monkeypatch.setattr(graph_module.user_account_service, "profile", fake_profile)
+    monkeypatch.setattr(graph_module.user_account_service, "personalization", fake_personalization)
     agent = LangGraphAgent()
     large_evidence = "证据" * 3000
     state = GraphState(

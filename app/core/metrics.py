@@ -45,6 +45,16 @@ trace_span_duration_seconds = Histogram(
 )
 llm_tokens_total = Counter("llm_tokens_total", "LLM token usage", ["model", "token_type"])
 trace_errors_total = Counter("trace_errors_total", "Trace errors", ["span", "error_code"])
+skill_activation_total = Counter("skill_activation_total", "Deployment Skill activations", ["status"])
+tool_budget_rejections_total = Counter(
+    "tool_budget_rejections_total", "Tool calls rejected by per-turn budgets", ["budget_class"]
+)
+knowledge_ingestion_jobs_total = Counter(
+    "knowledge_ingestion_jobs_total", "Personal knowledge ingestion job transitions", ["status"]
+)
+knowledge_acl_denials_total = Counter(
+    "knowledge_acl_denials_total", "Personal knowledge authorization denials", ["operation"]
+)
 
 
 def record_trace_span(name, status, duration_ms, tokens, error, attributes) -> None:

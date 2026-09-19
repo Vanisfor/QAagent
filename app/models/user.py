@@ -1,5 +1,7 @@
 """This file contains the user model for the application."""
 
+from datetime import UTC, datetime
+from sqlalchemy import Column, DateTime
 from typing import (
     TYPE_CHECKING,
     List,
@@ -34,6 +36,9 @@ class User(BaseModel, table=True):
     email: str = Field(unique=True, index=True)
     hashed_password: str
     username: Optional[str] = Field(default=None, index=False)
+    status: str = Field(default="active", max_length=16)
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC), sa_column=Column(DateTime(timezone=True), nullable=False))
+    last_login_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True)))
     sessions: List["Session"] = Relationship(back_populates="user")
 
     def verify_password(self, password: str) -> bool:

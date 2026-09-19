@@ -13,7 +13,13 @@ from app.api.v1.auth import db_service
 from app.api.v1.chatbot import _acquire_session_run, session_run_lock_service
 from app.core.config import settings
 from app.core.langgraph.tool_executor import ToolExecutor
-from app.core.langgraph.tool_policy import TOOL_POLICIES, ToolIdempotency, ToolPolicy, get_tool_policy
+from app.core.langgraph.tool_policy import (
+    TOOL_POLICIES,
+    ToolBudgetClass,
+    ToolIdempotency,
+    ToolPolicy,
+    get_tool_policy,
+)
 from app.core.middleware import route_template
 from app.main import _readiness_response, agent, liveness_check
 from app.services.database import database_service
@@ -21,6 +27,8 @@ from app.services.memory_jobs import MemoryJobService
 from app.repositories.memory_jobs import ClaimedMemoryJob
 from app.services.memory_jobs import MemoryJobLeaseLost
 from app.services.memory import memory_service
+from app.services.user_account import user_account_service
+from app.schemas.user_account import Personalization
 from app.services.session_runs import SessionRunLockService
 
 
@@ -49,7 +57,12 @@ def test_registered_tools_have_explicit_safety_classification() -> None:
     """Every production tool has an intentional idempotency and retry policy."""
     assert get_tool_policy("knowledge_search").idempotency == ToolIdempotency.READ_ONLY
     assert get_tool_policy("duckduckgo_results_json").max_attempts == 2
-    assert get_tool_policy("ask_human") == ToolPolicy(None, 1, ToolIdempotency.NON_IDEMPOTENT)
+    assert get_tool_policy("ask_human") == ToolPolicy(
+        None,
+        1,
+        ToolIdempotency.NON_IDEMPOTENT,
+        ToolBudgetClass.INTERACTIVE,
+    )
 
 
 def test_read_only_tool_retries_but_non_idempotent_tool_does_not(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -65,7 +78,11 @@ def test_read_only_tool_retries_but_non_idempotent_tool_does_not(monkeypatch: py
             raise RuntimeError("transient")
         return "ok"
 
-    monkeypatch.setitem(TOOL_POLICIES, "flaky", ToolPolicy(1.0, 2, ToolIdempotency.READ_ONLY))
+    monkeypatch.setitem(
+        TOOL_POLICIES,
+        "flaky",
+        ToolPolicy(1.0, 2, ToolIdempotency.READ_ONLY, ToolBudgetClass.READ_ONLY),
+    )
     message = asyncio.run(
         ToolExecutor().execute(
             {"name": "flaky", "id": "call-1", "args": {}},
@@ -76,7 +93,11 @@ def test_read_only_tool_retries_but_non_idempotent_tool_does_not(monkeypatch: py
     assert calls == 2
 
     calls = 0
-    monkeypatch.setitem(TOOL_POLICIES, "flaky", ToolPolicy(1.0, 5, ToolIdempotency.NON_IDEMPOTENT))
+    monkeypatch.setitem(
+        TOOL_POLICIES,
+        "flaky",
+        ToolPolicy(1.0, 5, ToolIdempotency.NON_IDEMPOTENT, ToolBudgetClass.SIDE_EFFECT),
+    )
     message = asyncio.run(
         ToolExecutor().execute(
             {"name": "flaky", "id": "call-2", "args": {}},
@@ -95,7 +116,11 @@ def test_tool_executor_preserves_graph_interrupt(monkeypatch: pytest.MonkeyPatch
         """Pause graph execution."""
         raise GraphInterrupt()
 
-    monkeypatch.setitem(TOOL_POLICIES, "interrupting", ToolPolicy(None, 1, ToolIdempotency.NON_IDEMPOTENT))
+    monkeypatch.setitem(
+        TOOL_POLICIES,
+        "interrupting",
+        ToolPolicy(None, 1, ToolIdempotency.NON_IDEMPOTENT, ToolBudgetClass.INTERACTIVE),
+    )
     with pytest.raises(GraphInterrupt):
         asyncio.run(
             ToolExecutor().execute(
@@ -190,6 +215,10 @@ def test_memory_job_renews_lease_during_long_processing(monkeypatch: pytest.Monk
     async def slow_add(user_id: str, messages: list[dict], metadata: dict) -> None:
         await asyncio.sleep(0.12)
 
+    async def enabled_preferences(user_id):
+        return Personalization()
+
+    monkeypatch.setattr(user_account_service, "personalization", enabled_preferences)
     service._repository = Repository()  # type: ignore[assignment]
     monkeypatch.setattr(memory_service, "add", slow_add)
     monkeypatch.setattr(settings, "MEMORY_JOB_HEARTBEAT_SECONDS", 0.1)
@@ -217,6 +246,10 @@ def test_memory_job_cancels_processing_after_lease_loss(monkeypatch: pytest.Monk
         finally:
             cancelled = True
 
+    async def enabled_preferences(user_id):
+        return Personalization()
+
+    monkeypatch.setattr(user_account_service, "personalization", enabled_preferences)
     service._repository = Repository()  # type: ignore[assignment]
     monkeypatch.setattr(memory_service, "add", blocked_add)
     monkeypatch.setattr(settings, "MEMORY_JOB_HEARTBEAT_SECONDS", 0.1)

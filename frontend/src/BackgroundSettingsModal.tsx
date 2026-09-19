@@ -36,14 +36,15 @@ const PRESETS: Array<{ value: Exclude<ChatBackgroundPreset, "custom">; label: st
 ];
 
 interface BackgroundSettingsModalProps {
-  open: boolean;
+  open?: boolean;
+  embedded?: boolean;
   settings: ChatBackgroundSettings;
   persistenceError?: string;
   onClose: () => void;
   onChange: (settings: ChatBackgroundSettings) => void;
 }
 
-export function BackgroundSettingsModal({ open, settings, persistenceError, onClose, onChange }: BackgroundSettingsModalProps) {
+export function BackgroundSettingsModal({ open = true, embedded = false, settings, persistenceError, onClose, onChange }: BackgroundSettingsModalProps) {
   const [error, setError] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -66,12 +67,12 @@ export function BackgroundSettingsModal({ open, settings, persistenceError, onCl
     onChange({ ...settings, preset, imageDataUrl: preset === "none" ? undefined : settings.imageDataUrl });
   }
 
-  return <Modal open={open} title="聊天背景" onClose={onClose}>
+  const content = <>
     <div className="background-studio">
       <section className="preference-section"><header><h3>背景样式</h3><p>选择预设配色，或上传一张图片作为聊天背景。</p></header>
         <div className="preset-grid">{PRESETS.map((preset) => <button type="button" key={preset.value} className={settings.preset === preset.value ? "active" : ""} onClick={() => selectPreset(preset.value)}><span className={`preset-preview ${preset.value === "none" ? "preset-none" : ""}`} style={preset.value === "none" ? undefined : { background: PRESET_GRADIENTS[preset.value] }} />{preset.label}</button>)}</div>
       </section>
-      <section className="preference-section"><header><h3>自定义图片</h3><p>支持 JPG、PNG、WebP，最大 2 MB，仅保存在当前浏览器。</p></header>
+      <section className="preference-section"><header><h3>自定义图片</h3><p>支持 JPG、PNG、WebP，最大 2 MB。保存外观设置后同步到你的账户，图片按比例铺满聊天区域。</p></header>
         {settings.imageDataUrl && <div className="custom-image-preview" style={{ backgroundImage: `url(${settings.imageDataUrl})` }} role="img" aria-label="当前背景预览" />}
         <input ref={fileInputRef} type="file" accept="image/jpeg,image/png,image/webp" onChange={selectImage} hidden />
         {settings.imageDataUrl && settings.preset !== "custom" && <button type="button" className="secondary-button" onClick={() => onChange({ ...settings, preset: "custom" })}><ImagePlus size={15} />使用当前图片</button>}
@@ -87,5 +88,6 @@ export function BackgroundSettingsModal({ open, settings, persistenceError, onCl
       </section>
       <button className="secondary-button full-width" onClick={() => onChange(defaultChatBackground)}>恢复默认</button>
     </div>
-  </Modal>;
+  </>;
+  return embedded ? content : <Modal open={open} title="聊天背景" onClose={onClose}>{content}</Modal>;
 }

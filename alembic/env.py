@@ -16,6 +16,7 @@ from app.models.thread import Thread  # noqa: F401
 from app.models.user import User  # noqa: F401
 from app.models.user_llm_settings import UserLLMSettings  # noqa: F401
 from app.models.memory_job import MemoryJob  # noqa: F401
+from app.models.user_account import UserProfile, UserSettings, UserPersonalization, UserLoginSession  # noqa: F401
 
 # Alembic Config object
 config = context.config

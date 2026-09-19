@@ -10,5 +10,15 @@ from langchain_core.tools.base import BaseTool
 from .ask_human import ask_human
 from .duckduckgo_search import duckduckgo_search_tool
 from .knowledge_search import knowledge_search
+from app.core.skills.registry import skill_registry
+from app.core.skills.tools import activate_skill
 
-tools: list[BaseTool] = [knowledge_search, duckduckgo_search_tool, ask_human]
+_BASE_TOOLS: tuple[BaseTool, ...] = (knowledge_search, duckduckgo_search_tool, ask_human)
+
+
+def get_tools() -> list[BaseTool]:
+    """Return request-visible tools, omitting Skill activation for an empty catalog."""
+    available = list(_BASE_TOOLS)
+    if skill_registry.skills:
+        available.append(activate_skill)
+    return available

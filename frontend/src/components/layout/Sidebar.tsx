@@ -1,5 +1,9 @@
 import { useState } from "react";
-import { Image as ImageIcon, LogOut, MessageSquare, MessageSquarePlus, Pencil, Search, Settings, Trash2 } from "lucide-react";
+import { Database, MessageSquare, MessageSquarePlus, Pencil, Search, Trash2 } from "lucide-react";
+
+import type { SettingsCategory } from "../../settings/SettingsModal";
+
+import { UserProfileMenu } from "./UserProfileMenu";
 
 import type { SessionSummary } from "../../types";
 
@@ -10,13 +14,15 @@ interface SidebarProps {
   collapsed: boolean;
   mobileOpen: boolean;
   userLabel: string;
+  displayName: string;
+  avatar: string;
   onNewSession: () => void;
   onSelectSession: (session: SessionSummary) => void;
   onRenameSession: (session: SessionSummary, name: string) => void;
   onDeleteSession: (session: SessionSummary) => void;
   onToggle: () => void;
-  onOpenSettings: () => void;
-  onOpenBackground: () => void;
+  onOpenSettings: (category: SettingsCategory) => void;
+  onOpenKnowledge: () => void;
   onLogout: () => void;
 }
 
@@ -25,7 +31,6 @@ export function Sidebar(props: SidebarProps) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
   const filtered = props.sessions.filter((session) => session.name.toLowerCase().includes(query.trim().toLowerCase()));
-  const initials = props.userLabel.slice(0, 1).toUpperCase() || "U";
 
   function startRename(session: SessionSummary) {
     setEditingId(session.sessionId);
@@ -41,6 +46,7 @@ export function Sidebar(props: SidebarProps) {
     {props.mobileOpen && <div className="sidebar-backdrop" onClick={props.onToggle} />}
     <aside className={`sidebar ${props.collapsed ? "collapsed" : ""} ${props.mobileOpen ? "mobile-open" : ""}`} aria-label="会话侧边栏">
       <div className="sidebar-header"><button className="new-chat-button" disabled={props.busy} onClick={props.onNewSession}><MessageSquarePlus size={16} /><span>新建对话</span></button></div>
+      <div className="sidebar-header"><button className="new-chat-button" type="button" onClick={props.onOpenKnowledge}><Database size={16} /><span>我的知识库</span></button></div>
       <div className="sidebar-search"><Search size={14} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索对话…" aria-label="搜索对话" /></div>
       <p className="sidebar-label">聊天记录</p>
       <nav className="session-list" aria-label="历史会话">
@@ -62,11 +68,7 @@ export function Sidebar(props: SidebarProps) {
           })}
       </nav>
       <div className="sidebar-footer">
-        <span className="user-avatar">{initials}</span>
-        <span className="user-name">{props.userLabel}</span>
-        <button className="icon-button" onClick={props.onOpenBackground} aria-label="聊天背景" title="聊天背景"><ImageIcon size={16} /></button>
-        <button className="icon-button" onClick={props.onOpenSettings} aria-label="模型与 API 设置" title="模型设置"><Settings size={16} /></button>
-        <button className="icon-button" onClick={props.onLogout} aria-label="退出登录" title="退出登录"><LogOut size={16} /></button>
+        <UserProfileMenu key={`${props.userLabel}:${props.sessionId}`} userLabel={props.userLabel} displayName={props.displayName} avatar={props.avatar} onOpenSettings={props.onOpenSettings} onLogout={props.onLogout} />
       </div>
     </aside>
   </>;
