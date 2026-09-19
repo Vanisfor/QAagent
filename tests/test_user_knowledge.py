@@ -1,6 +1,8 @@
 """Tests for owner-scoped personal knowledge uploads."""
 
 from pathlib import Path
+from datetime import UTC, datetime
+from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
@@ -16,6 +18,22 @@ def test_space_create_contract_rejects_client_identity_and_public_flag() -> None
         KnowledgeSpaceCreate.model_validate({"name": "Mine", "user_id": 9})
     with pytest.raises(ValidationError):
         KnowledgeSpaceCreate.model_validate({"name": "Mine", "is_public": True})
+
+
+def test_space_name_cannot_be_only_whitespace() -> None:
+    """Validation must reject the empty value after trimming."""
+    with pytest.raises(ValidationError):
+        KnowledgeSpaceCreate(name="   ")
+
+
+def test_job_status_never_exposes_provider_error_or_storage_paths() -> None:
+    """Persisted exceptions can include credentials and filenames; the API uses safe copy."""
+    job = SimpleNamespace(id=1, space_slug="mine", original_name="notes.txt", status="failed",
+                          attempts=5, document_id=None, created_at=datetime.now(UTC),
+                          last_error="provider token secret /private/path")
+    result = UserKnowledgeService._job_view(job)
+    assert "secret" not in result.model_dump_json()
+    assert "/private/path" not in result.model_dump_json()
 
 
 def test_upload_validation_accepts_supported_utf8_text() -> None:

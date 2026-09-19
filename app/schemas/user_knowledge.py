@@ -17,7 +17,10 @@ class KnowledgeSpaceCreate(BaseModel):
     @classmethod
     def strip_name(cls, value: str) -> str:
         """Reject presentation-only whitespace."""
-        return value.strip()
+        value = value.strip()
+        if not value:
+            raise ValueError("Knowledge space name cannot be blank")
+        return value
 
 
 class KnowledgeSpaceSummary(BaseModel):
@@ -57,4 +60,3 @@ class KnowledgeUploadResponse(BaseModel):
     """Receipt returned after a validated upload is durably queued."""
 
     job: KnowledgeIngestionJobView
-

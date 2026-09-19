@@ -243,6 +243,10 @@ uv run python scripts/ingest_docs.py ".\knowledge" --reset
 
 如果上述七步都通过，说明账号、前后端连接、数据库、模型调用、SSE 流式传输和 RAG 主链路已经跑通。
 
+## 效果图
+
+![alt text](assets/example.png)
+
 ## 可选：启动完整监控栈
 
 ```powershell

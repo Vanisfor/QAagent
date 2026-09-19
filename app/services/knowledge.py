@@ -131,6 +131,10 @@ class KnowledgeSpaceNotFound(Exception):
     """Raised when ingestion targets a knowledge space that does not exist."""
 
 
+class KnowledgeIngestionLeaseLost(RuntimeError):
+    """Reject document mutations made without the current ingestion lease."""
+
+
 class KnowledgeService:
     """Manage document ingestion, storage and retrieval for the knowledge base."""
 
@@ -502,6 +506,7 @@ class KnowledgeService:
         connector_id: Optional[int] = None,
         document_metadata: Optional[Dict[str, Any]] = None,
         source_updated_at: Optional[datetime] = None,
+        ingestion_lease: tuple[int, str] | None = None,
     ) -> int:
         """Atomically replace all stored chunks for one source document.
 
@@ -536,6 +541,32 @@ class KnowledgeService:
         async with pool.connection() as conn:
             async with conn.transaction():
                 async with conn.cursor() as cur:
+                    if ingestion_lease is not None:
+                        await cur.execute(
+                            """
+                            SELECT job.id
+                            FROM knowledge_ingestion_jobs AS job
+                            JOIN knowledge_spaces AS space ON space.id = job.space_id
+                            JOIN organization_members AS member
+                              ON member.organization_id = space.organization_id AND member.user_id = job.user_id
+                            JOIN "user" AS account ON account.id = job.user_id AND account.status = 'active'
+                            WHERE job.id = %s AND job.lease_token = %s AND job.status = 'processing'
+                              AND space.slug = %s AND job.external_id = %s
+                              AND EXISTS (
+                                  SELECT 1 FROM knowledge_space_principals AS acl
+                                  WHERE acl.space_id = space.id AND acl.role IN ('editor', 'owner')
+                                    AND ((acl.principal_type = 'user' AND acl.principal_id = job.user_id::text)
+                                      OR (acl.principal_type = 'group' AND EXISTS (
+                                          SELECT 1 FROM knowledge_group_members AS gm
+                                          WHERE gm.user_id = job.user_id AND gm.group_id::text = acl.principal_id
+                                      )))
+                              )
+                            FOR UPDATE OF job
+                            """,
+                            (*ingestion_lease, target_space, external_document_id),
+                        )
+                        if await cur.fetchone() is None:
+                            raise KnowledgeIngestionLeaseLost("ingestion lease or write permission is no longer valid")
                     await cur.execute(
                         """
                         INSERT INTO knowledge_documents (

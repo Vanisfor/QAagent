@@ -104,7 +104,13 @@ class ExplicitRetrievalPipeline:
         include_graph: bool,
     ) -> list[list[KnowledgeHit]]:
         """Execute one retrieval round without deciding whether to loop."""
-        effective_context = context.model_copy(update={"space_slugs": tuple(plan.space_slugs)})
+        if context.space_scope_requested and not context.space_slugs:
+            return []
+        if context.space_slugs and set(plan.space_slugs) - set(context.space_slugs):
+            raise ValueError("retrieval plan exceeds authorized scope")
+        effective_context = context.model_copy(
+            update={"space_slugs": tuple(plan.space_slugs) or context.space_slugs}
+        )
         per_query_k = min(max(top_k, settings.KNOWLEDGE_TOP_K), 20)
         rankings: list[list[KnowledgeHit]] = []
         if include_graph and plan.use_graph:

@@ -15,11 +15,7 @@ from app.repositories.knowledge_ingestion_jobs import (
 )
 from app.services.database import database_service
 from app.services.document_chunking import chunk_document
-from app.services.knowledge import knowledge_service
-
-
-class KnowledgeIngestionLeaseLost(RuntimeError):
-    """Raised when a stale worker no longer owns a job."""
+from app.services.knowledge import KnowledgeIngestionLeaseLost, knowledge_service
 
 
 class KnowledgeIngestionJobService:
@@ -76,7 +72,7 @@ class KnowledgeIngestionJobService:
                         job.lease_token,
                         job.attempts,
                         settings.KNOWLEDGE_INGESTION_MAX_ATTEMPTS,
-                        f"{type(error).__name__}: {error}",
+                        type(error).__name__,
                     )
                     logger.exception(
                         "knowledge_ingestion_failed",
@@ -92,6 +88,10 @@ class KnowledgeIngestionJobService:
                 raise
             except Exception as error:
                 logger.exception("knowledge_ingestion_worker_iteration_failed", error_type=type(error).__name__)
+                try:
+                    await asyncio.wait_for(self._stop.wait(), timeout=settings.KNOWLEDGE_INGESTION_POLL_SECONDS)
+                except TimeoutError:
+                    pass
 
     async def _process_with_heartbeat(self, job: ClaimedKnowledgeIngestionJob) -> None:
         """Process one upload while proving lease ownership."""
@@ -147,6 +147,7 @@ class KnowledgeIngestionJobService:
             source_type="upload",
             external_id=job.external_id,
             document_metadata={"owner_user_id": job.user_id, "file_name": job.original_name},
+            ingestion_lease=(job.id, job.lease_token),
         )
         return await self._document_id(job)
 

@@ -322,7 +322,7 @@ class UserKnowledgeService:
             status=job.status,
             attempts=job.attempts,
             document_id=job.document_id,
-            error=job.last_error if job.status == "failed" else None,
+            error="文档处理失败，请重试；持续失败时请联系管理员。" if job.status == "failed" else None,
             created_at=job.created_at,
         )
 
