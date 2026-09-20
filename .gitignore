@@ -31,5 +31,7 @@ CLAUDE.md
 
 #knowledge files
 /knowledge/
+/pytest-temp*/
+/.test-output-*/
 docs/superpowers/
 docs/atlas-cloud-logo*.png

@@ -86,7 +86,7 @@ def _require_refresh_header(request: Request) -> None:
         raise HTTPException(403, "Missing authentication request header")
     origin = request.headers.get("origin")
     trusted = {str(request.base_url).rstrip("/"), *(value.rstrip("/") for value in settings.ALLOWED_ORIGINS if value != "*")}
-    if origin and "*" not in settings.ALLOWED_ORIGINS and origin.rstrip("/") not in trusted:
+    if origin and origin.rstrip("/") not in trusted:
         raise HTTPException(403, "Untrusted authentication origin")
 
 

@@ -11,6 +11,7 @@ from app.core.langgraph.tools.knowledge_search import (
     user_llm_settings_service,
 )
 from app.schemas.knowledge import KnowledgeHit, RetrievalContext
+from app.services.knowledge import KnowledgeService
 from app.schemas.retrieval import QueryPlan, RetrievalBundle
 
 
@@ -114,3 +115,18 @@ def test_knowledge_search_does_not_fall_back_when_requested_spaces_are_denied(mo
 
     assert called is False
     assert "No accessible internal evidence" in result
+
+
+def test_direct_knowledge_search_rejects_denied_explicit_scope(monkeypatch) -> None:
+    """Direct service callers must not search all spaces after authorization returned none."""
+    service = KnowledgeService()
+
+    async def forbidden_embedding(_texts):
+        raise AssertionError("denied scope must stop before embedding")
+
+    monkeypatch.setattr(service, "embed", forbidden_embedding)
+    result = asyncio.run(service.search(
+        "private policy",
+        context=RetrievalContext(user_id="7", organization_ids=(1,), space_scope_requested=True),
+    ))
+    assert result == []

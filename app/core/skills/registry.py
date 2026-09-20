@@ -109,7 +109,7 @@ class SkillRegistry:
                 except (OSError, UnicodeError, ValueError) as error:
                     logger.warning(
                         "skill_metadata_skipped",
-                        path=str(candidate),
+                        path_digest=hashlib.sha256(str(candidate).encode("utf-8")).hexdigest()[:12],
                         error_type=type(error).__name__,
                     )
                     continue

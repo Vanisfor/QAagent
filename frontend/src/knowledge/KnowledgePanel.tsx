@@ -92,6 +92,7 @@ export function KnowledgePanel({ open, token, selected, onSelected, onClose }: K
 
   const current = spaces.find((space) => space.slug === active);
   const canEdit = current?.role === "owner" || current?.role === "editor";
+  const canDelete = current?.role === "owner";
 
   return <Modal open={open} title="我的知识库" onClose={onClose}>
     <div className="knowledge-panel">
@@ -101,7 +102,7 @@ export function KnowledgePanel({ open, token, selected, onSelected, onClose }: K
         <div className="knowledge-spaces" aria-label="知识空间">{spaces.length === 0 ? <p className="muted">暂无知识空间</p> : spaces.map((space) => <div key={space.slug} className={`knowledge-space ${active === space.slug ? "active" : ""}`}><button type="button" onClick={() => setActive(space.slug)}><strong>{space.name}</strong><span>{space.document_count} 个文档 · {space.role === "owner" ? "所有者" : space.role === "editor" ? "可编辑" : "只读"}</span></button><label title="用于聊天检索"><input type="checkbox" checked={selected.includes(space.slug)} onChange={() => toggleSelection(space.slug)} />用于聊天</label></div>)}</div>
         <div className="knowledge-documents">
           <div className="knowledge-toolbar"><h3>{current?.name ?? "文档"}</h3>{canEdit && <><button className="secondary-button" disabled={busy} onClick={() => fileInput.current?.click()}><Upload size={15} />上传</button><input ref={fileInput} hidden type="file" accept=".md,.txt,.rst,text/plain,text/markdown" onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ""; void perform(() => upload(file)); }} /></>}</div>
-          {documents.length === 0 ? <p className="muted">当前空间暂无可用文档。</p> : documents.map((document) => <div className="knowledge-document" key={document.id}><FileText size={16} /><div><strong>{document.title || document.source}</strong><span>{new Date(document.updated_at).toLocaleString()}</span></div>{canEdit && <button className="icon-button" title="删除文档" aria-label={`删除 ${document.title || document.source}`} onClick={() => void perform(() => remove(document))}><Trash2 size={15} /></button>}</div>)}
+          {documents.length === 0 ? <p className="muted">当前空间暂无可用文档。</p> : documents.map((document) => <div className="knowledge-document" key={document.id}><FileText size={16} /><div><strong>{document.title || document.source}</strong><span>{new Date(document.updated_at).toLocaleString()}</span></div>{canDelete && <button className="icon-button" title="删除文档" aria-label={`删除 ${document.title || document.source}`} onClick={() => void perform(() => remove(document))}><Trash2 size={15} /></button>}</div>)}
         </div>
       </div>
       {busy && <p role="status">正在处理…</p>}{status && <p role="status">{status}</p>}{error && <p className="form-error" role="alert">{error}</p>}

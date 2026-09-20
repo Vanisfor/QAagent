@@ -112,7 +112,15 @@ class KnowledgeIngestionJobService:
                     processing.cancel()
                     await asyncio.gather(processing, return_exceptions=True)
                     raise KnowledgeIngestionLeaseLost(f"lease lost for job {job.id}")
-            document_id = await processing
+            try:
+                document_id = await processing
+            except KnowledgeIngestionLeaseLost:
+                if await self._repository.renew(job.id, job.lease_token):
+                    await self._repository.fail(
+                        job.id, job.lease_token, job.attempts, job.attempts,
+                        "write_permission_revoked",
+                    )
+                raise
             if not await self._repository.succeed(job.id, job.lease_token, document_id):
                 raise KnowledgeIngestionLeaseLost(f"lease lost while completing job {job.id}")
             logger.info("knowledge_ingestion_completed", job_id=job.id, document_id=document_id)

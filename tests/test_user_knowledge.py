@@ -5,11 +5,14 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
+import asyncio
 from fastapi import HTTPException
 from pydantic import ValidationError
 
 from app.schemas.user_knowledge import KnowledgeSpaceCreate
 from app.services.user_knowledge import UserKnowledgeService
+from app.services.user_knowledge import SpaceAuthorization
+from app.core.config import settings
 
 
 def test_space_create_contract_rejects_client_identity_and_public_flag() -> None:
@@ -78,3 +81,39 @@ def test_upload_storage_path_cannot_escape_owner_directory(tmp_path: Path) -> No
     assert path == (tmp_path / "7" / "abc123.md").resolve()
     assert path.is_relative_to(tmp_path.resolve())
     assert ".." not in path.parts
+
+
+def test_failed_job_enqueue_removes_just_written_upload(monkeypatch, tmp_path: Path) -> None:
+    """A database error must not strand a raw private document on disk."""
+    service = UserKnowledgeService()
+    monkeypatch.setattr(settings, "KNOWLEDGE_UPLOAD_DIR", tmp_path)
+
+    async def authorize(_user_id, _slug, _role):
+        return SpaceAuthorization(id=1, slug="mine", organization_id=1, role="owner")
+
+    class FailedQueue:
+        async def enqueue(self, **_values):
+            raise RuntimeError("database unavailable")
+
+    class EmptySession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def exec(self, *_args, **_kwargs):
+            class Result:
+                @staticmethod
+                def scalar_one():
+                    return 0
+            return Result()
+
+    monkeypatch.setattr(service, "require_role", authorize)
+    monkeypatch.setattr(service, "_jobs", FailedQueue())
+    monkeypatch.setattr("app.services.user_knowledge.database_service.session_factory", lambda: EmptySession())
+    with pytest.raises(RuntimeError, match="database unavailable"):
+        asyncio.run(service.enqueue_upload(
+            7, "mine", filename="notes.txt", content_type="text/plain", data=b"private document"
+        ))
+    assert list((tmp_path / "7").glob("*")) == []

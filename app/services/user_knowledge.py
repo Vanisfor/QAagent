@@ -233,21 +233,41 @@ class UserKnowledgeService:
             suffix=validated.suffix,
         )
         await asyncio.to_thread(path.parent.mkdir, parents=True, exist_ok=True)
-        await asyncio.to_thread(path.write_bytes, data)
-        idempotency_key = hashlib.sha256(
-            f"{user_id}:{authorization.id}:{filename}:{validated.checksum}".encode()
-        ).hexdigest()
-        job_id, created = await self._jobs.enqueue(
-            idempotency_key=idempotency_key,
-            user_id=user_id,
-            space_id=authorization.id,
-            space_slug=authorization.slug,
-            external_id=external_id,
-            original_name=Path(filename).name[:255],
-            stored_path=str(path),
-            content_type=content_type or "text/plain",
-            checksum=validated.checksum,
+        generation_statement: Any = text(
+            """
+            SELECT count(*) FROM knowledge_ingestion_jobs AS job
+            LEFT JOIN knowledge_documents AS document ON document.id = job.document_id
+            WHERE job.user_id = :user_id AND job.space_id = :space_id
+              AND job.original_name = :name AND job.checksum = :checksum
+              AND (job.status = 'failed' OR document.deleted_at IS NOT NULL)
+            """
         )
+        async with database_service.session_factory() as session:
+            generation = (
+                await session.exec(generation_statement, params={
+                    "user_id": user_id, "space_id": authorization.id,
+                    "name": Path(filename).name[:255], "checksum": validated.checksum,
+                })
+            ).scalar_one()
+        idempotency_key = hashlib.sha256(
+            f"{user_id}:{authorization.id}:{Path(filename).name[:255]}:{validated.checksum}:{generation}".encode()
+        ).hexdigest()
+        try:
+            await asyncio.to_thread(path.write_bytes, data)
+            job_id, created = await self._jobs.enqueue(
+                idempotency_key=idempotency_key,
+                user_id=user_id,
+                space_id=authorization.id,
+                space_slug=authorization.slug,
+                external_id=external_id,
+                original_name=Path(filename).name[:255],
+                stored_path=str(path),
+                content_type=content_type or "text/plain",
+                checksum=validated.checksum,
+            )
+        except BaseException:
+            await asyncio.to_thread(path.unlink, missing_ok=True)
+            raise
         if not created:
             await asyncio.to_thread(path.unlink, missing_ok=True)
         job = await self._jobs.get_for_user(job_id, user_id)
@@ -274,24 +294,23 @@ class UserKnowledgeService:
         return [KnowledgeDocumentSummary.model_validate(dict(row)) for row in rows]
 
     async def delete_document(self, user_id: int, space_slug: str, document_id: int) -> None:
-        """Delete one upload only after owner/editor authorization."""
-        await self.require_role(user_id, space_slug, "editor")
+        """Delete one upload only after owner authorization."""
+        await self.require_role(user_id, space_slug, "owner")
         statement: Any = text(
             """
             SELECT document.external_id, job.stored_path
             FROM knowledge_documents AS document
             JOIN knowledge_spaces AS space ON space.id = document.space_id
-            LEFT JOIN knowledge_ingestion_jobs AS job
-              ON job.document_id = document.id AND job.user_id = :user_id
+            LEFT JOIN knowledge_ingestion_jobs AS job ON job.document_id = document.id
             WHERE document.id = :document_id AND space.slug = :space_slug
-              AND document.source_type = 'upload' AND document.deleted_at IS NULL
+              AND document.source_type = 'upload'
             """
         )
         async with database_service.session_factory() as session:
             row = (
                 await session.exec(
                     statement,
-                    params={"user_id": user_id, "document_id": document_id, "space_slug": space_slug},
+                    params={"document_id": document_id, "space_slug": space_slug},
                 )
             ).mappings().first()
         if row is None:

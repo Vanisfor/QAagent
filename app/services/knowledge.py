@@ -791,6 +791,8 @@ class KnowledgeService:
             threshold = min(max(settings.KNOWLEDGE_MIN_SIMILARITY, 0.0), 1.0)
 
         access_context = context or RetrievalContext(user_id="anonymous", organization_ids=(1,))
+        if access_context.space_scope_requested and not access_context.space_slugs:
+            return []
         if not access_context.organization_ids:
             raise ValueError("organization context is required for knowledge retrieval")
         group_ids = list(access_context.group_ids)

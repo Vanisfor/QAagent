@@ -20,10 +20,15 @@ def test_explicit_denied_scope_never_reaches_retrieval() -> None:
     """Research and direct pipeline callers cannot turn denied scope into all spaces."""
     knowledge = FakeKnowledge()
     pipeline = ExplicitRetrievalPipeline(FakePlanner(), knowledge, FakeGraph(), FakeEvaluator())
-    rankings = asyncio.run(pipeline.search(
-        QueryPlan(queries=["rewritten query"]), ["rewritten query"],
-        RetrievalContext(user_id="7", space_scope_requested=True), top_k=5, include_graph=True,
-    ))
+    rankings = asyncio.run(
+        pipeline.search(
+            QueryPlan(queries=["rewritten query"]),
+            ["rewritten query"],
+            RetrievalContext(user_id="7", space_scope_requested=True),
+            top_k=5,
+            include_graph=True,
+        )
+    )
     assert rankings == []
     assert knowledge.queries == []
 
@@ -32,11 +37,15 @@ def test_pipeline_rejects_plan_outside_explicit_scope() -> None:
     """A caller-provided plan cannot widen a validated private-space selection."""
     pipeline = ExplicitRetrievalPipeline(FakePlanner(), FakeKnowledge(), FakeGraph(), FakeEvaluator())
     with pytest.raises(ValueError, match="scope"):
-        asyncio.run(pipeline.search(
-            QueryPlan(queries=["q"], space_slugs=["other"]), ["q"],
-            RetrievalContext(user_id="7", space_slugs=("mine",), space_scope_requested=True),
-            top_k=5, include_graph=False,
-        ))
+        asyncio.run(
+            pipeline.search(
+                QueryPlan(queries=["q"], space_slugs=["other"]),
+                ["q"],
+                RetrievalContext(user_id="7", space_slugs=("mine",), space_scope_requested=True),
+                top_k=5,
+                include_graph=False,
+            )
+        )
 
 
 class FakeKnowledge:
